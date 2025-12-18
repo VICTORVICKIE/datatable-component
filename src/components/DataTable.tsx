@@ -337,11 +337,33 @@ export default function DataTableComponent({
     return sortedData.slice(first, first + rows);
   }, [sortedData, first, rows]);
 
-  const footerTemplate = (column: string) => {
+  const footerTemplate = (column: string, isFirstColumn: boolean = false) => {
     if (!enableSummation) return null;
-    if (columnTypes[column]?.isBoolean) return null;
+    
     const sum = calculateSums[column];
+    const hasSum = sum !== undefined && !columnTypes[column]?.isBoolean;
+    
+    if (isFirstColumn) {
+      if (hasSum) {
+        const formattedSum = sum % 1 === 0
+          ? sum.toLocaleString('en-US')
+          : sum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return (
+          <div className="text-left">
+            <strong>Total: {formattedSum}</strong>
+          </div>
+        );
+      }
+      return (
+        <div className="text-left">
+          <strong>Total</strong>
+        </div>
+      );
+    }
+    
+    if (columnTypes[column]?.isBoolean) return null;
     if (sum === undefined) return null;
+    
     const formattedSum = sum % 1 === 0
       ? sum.toLocaleString('en-US')
       : sum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -468,10 +490,11 @@ export default function DataTableComponent({
           style={{ minWidth: '100%' }}
           filterDisplay={enableFilter ? "row" : undefined}
         >
-          {frozenCols.map((col) => {
+          {frozenCols.map((col, index) => {
             const colType = columnTypes[col];
             const isBoolean = colType?.isBoolean || false;
             const isNumeric = colType?.isNumeric || false;
+            const isFirstColumn = index === 0;
             return (
               <Column
                 key={`frozen-${col}`}
@@ -488,7 +511,7 @@ export default function DataTableComponent({
                 filterElement={enableFilter ? getFilterElement(col) : undefined}
                 showFilterMenu={false}
                 showClearButton={false}
-                footer={footerTemplate(col)}
+                footer={footerTemplate(col, isFirstColumn)}
                 body={isBoolean
                   ? (rowData) => booleanBodyTemplate(rowData, col)
                   : (rowData) => (
