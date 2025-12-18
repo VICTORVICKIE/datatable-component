@@ -16,6 +16,7 @@ export default function Home() {
       <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 lg:px-8 py-3 sm:py-4">
           <h1 className="text-xl sm:text-2xl font-semibold text-gray-900">Data Table Component</h1>
+          <p className="text-xs sm:text-sm text-gray-600 mt-1">Primereact Datatable Component Playground</p>
         </div>
       </header>
 

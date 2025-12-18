@@ -16,8 +16,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Data Management System",
-  description: "Professional data table management interface",
+  title: "Data Table Component",
+  description: "Primereact Datatable Component Playground",
 };
 
 export default function RootLayout({
