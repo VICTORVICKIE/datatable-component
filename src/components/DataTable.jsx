@@ -4,6 +4,7 @@ import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { InputText } from 'primereact/inputtext';
+import { Calendar } from 'primereact/calendar';
 import { Paginator } from 'primereact/paginator';
 import {
   isNil,
@@ -26,12 +27,100 @@ import {
   includes,
   isBoolean,
   isString,
+  isDate,
   head,
   tail,
   toNumber,
   isNaN as _isNaN,
   trim,
 } from 'lodash';
+
+// Date format patterns for detection
+const DATE_PATTERNS = [
+  /^\d{4}-\d{2}-\d{2}$/,                          // ISO: 2024-01-15
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,         // ISO with time: 2024-01-15T10:30:00
+  /^\d{4}\/\d{2}\/\d{2}$/,                        // 2024/01/15
+  /^\d{1,2}\/\d{1,2}\/\d{4}$/,                    // US: 01/15/2024 or 1/15/2024
+  /^\d{1,2}-\d{1,2}-\d{4}$/,                      // 01-15-2024
+  /^\d{1,2}\.\d{1,2}\.\d{4}$/,                    // EU: 15.01.2024
+  /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}$/i, // Jan 15, 2024
+  /^\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}$/i,   // 15 Jan 2024
+];
+
+/**
+ * Check if a value looks like a date
+ */
+function isDateLike(value) {
+  if (isNil(value)) return false;
+  // Explicitly reject 0, empty strings, and small numbers
+  if (value === 0 || value === '0' || value === '') return false;
+  if (isDate(value)) return true;
+  if (isNumber(value)) {
+    // Check if it's a reasonable timestamp (must be > 1 year in milliseconds to avoid small numbers)
+    // Minimum: Jan 1, 1980 (315532800000) to avoid false positives with small numbers
+    const minTimestamp = 315532800000; // 1980-01-01
+    const maxTimestamp = 4102444800000; // 2100-01-01
+    if (value >= minTimestamp && value <= maxTimestamp) {
+      const date = new Date(value);
+      return !isNaN(date.getTime());
+    }
+    return false;
+  }
+  if (isString(value)) {
+    const trimmed = trim(value);
+    if (trimmed === '') return false;
+    // Reject pure numbers (could be IDs, quantities, etc.)
+    if (/^-?\d+$/.test(trimmed)) return false;
+    // Check against known patterns
+    if (DATE_PATTERNS.some(pattern => pattern.test(trimmed))) {
+      const parsed = new Date(trimmed);
+      return !isNaN(parsed.getTime());
+    }
+    // Try parsing as date string (but be strict)
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) {
+      // Make sure it's not just a number or simple numeric string
+      return !/^-?\d+\.?\d*$/.test(trimmed);
+    }
+  }
+  return false;
+}
+
+/**
+ * Parse a value to a Date object
+ */
+function parseToDate(value) {
+  if (isNil(value)) return null;
+  if (value === '' || value === 0 || value === '0') return null; // Empty or zero values
+  if (isDate(value)) return value;
+  if (isNumber(value)) {
+    // Reject timestamps that would result in epoch (1970) or invalid dates
+    if (value <= 0) return null;
+    const date = new Date(value);
+    return isNaN(date.getTime()) ? null : date;
+  }
+  if (isString(value)) {
+    const trimmed = trim(value);
+    if (trimmed === '') return null;
+    const parsed = new Date(trimmed);
+    return isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
+/**
+ * Format a date for display
+ */
+function formatDateValue(value) {
+  if (isNil(value) || value === '' || value === 0 || value === '0') return '';
+  const date = parseToDate(value);
+  if (!date) return String(value ?? '');
+  return date.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric'
+  });
+}
 
 /**
  * Parse numeric filter expression
@@ -149,6 +238,35 @@ function applyNumericFilter(cellValue, parsedFilter) {
   }
 }
 
+/**
+ * Apply date range filter to a cell value
+ */
+function applyDateFilter(cellValue, dateRange) {
+  if (!dateRange || (!dateRange[0] && !dateRange[1])) return true;
+  
+  const cellDate = parseToDate(cellValue);
+  if (!cellDate) return false;
+  
+  const [startDate, endDate] = dateRange;
+  
+  // Normalize to start/end of day for comparison
+  const cellTime = cellDate.getTime();
+  
+  if (startDate && endDate) {
+    const startTime = new Date(startDate).setHours(0, 0, 0, 0);
+    const endTime = new Date(endDate).setHours(23, 59, 59, 999);
+    return cellTime >= startTime && cellTime <= endTime;
+  } else if (startDate) {
+    const startTime = new Date(startDate).setHours(0, 0, 0, 0);
+    return cellTime >= startTime;
+  } else if (endDate) {
+    const endTime = new Date(endDate).setHours(23, 59, 59, 999);
+    return cellTime <= endTime;
+  }
+  
+  return true;
+}
+
 function CustomTriStateCheckbox({ value, onChange }) {
   const handleClick = () => {
     if (value === null) {
@@ -178,6 +296,48 @@ function CustomTriStateCheckbox({ value, onChange }) {
       )}
       {value === null && (
         <i className="pi pi-minus text-gray-400 text-xs" />
+      )}
+    </div>
+  );
+}
+
+function DateRangeFilter({ value, onChange }) {
+  const handleChange = (e) => {
+    onChange(e.value);
+  };
+
+  const handleClear = () => {
+    onChange(null);
+  };
+
+  const hasValue = value && (value[0] || value[1]);
+
+  return (
+    <div className="date-range-filter flex items-center gap-1">
+      <Calendar
+        value={value}
+        onChange={handleChange}
+        selectionMode="range"
+        readOnlyInput
+        placeholder="Date range"
+        showIcon
+        iconPos="left"
+        dateFormat="M d, yy"
+        className="p-column-filter date-range-calendar"
+        inputClassName="text-xs"
+        showButtonBar
+        numberOfMonths={1}
+        style={{ width: '100%' }}
+      />
+      {hasValue && (
+        <button
+          type="button"
+          onClick={handleClear}
+          className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+          title="Clear filter"
+        >
+          <i className="pi pi-times text-xs" />
+        </button>
       )}
     </div>
   );
@@ -260,8 +420,14 @@ export default function DataTableComponent({
     return startCase(key.split('__').join(' ').split('_').join(' '));
   }, []);
 
-  const formatCellValue = useCallback((value) => {
+  const formatCellValue = useCallback((value, colType) => {
     if (isNil(value)) return '';
+    
+    // Format dates
+    if (colType?.isDate) {
+      return formatDateValue(value);
+    }
+    
     if (isNumber(value)) {
       return value % 1 === 0
         ? value.toLocaleString('en-US')
@@ -287,27 +453,37 @@ export default function DataTableComponent({
         const value = get(row, col);
         if (!isNil(value)) {
           nonNullCount++;
-          if (isNumericValue(value)) numericCount++;
-          if (isString(value) && /^\d{4}-\d{2}-\d{2}/.test(value)) dateCount++;
           if (isBoolean(value)) booleanCount++;
           // Check for binary 0/1 values (number or string)
-          if (value === 0 || value === 1 || value === '0' || value === '1') {
+          else if (value === 0 || value === 1 || value === '0' || value === '1') {
             binaryCount++;
+          }
+          // Check for date (before numeric to avoid timestamp confusion)
+          else if (isDateLike(value)) {
+            dateCount++;
+          }
+          // Check for numeric
+          else if (isNumericValue(value)) {
+            numericCount++;
           }
         }
       });
 
-      const isNumericColumn = nonNullCount > 0 && numericCount > nonNullCount * 0.8;
-      const isDateColumn = nonNullCount > 0 && dateCount > nonNullCount * 0.5;
       const isTrueBooleanColumn = nonNullCount > 0 && booleanCount > nonNullCount * 0.7;
       // Infer boolean from 0/1 if all non-null values are binary
       const isBinaryBooleanColumn = nonNullCount > 0 && binaryCount === nonNullCount && binaryCount >= 1;
       const isBooleanColumn = isTrueBooleanColumn || isBinaryBooleanColumn;
+      
+      // Date detection: at least 70% should be date-like
+      const isDateColumn = !isBooleanColumn && nonNullCount > 0 && dateCount > nonNullCount * 0.7;
+      
+      // Numeric detection: at least 80% should be numeric (excluding dates and booleans)
+      const isNumericColumn = !isBooleanColumn && !isDateColumn && nonNullCount > 0 && numericCount > nonNullCount * 0.8;
 
       types[col] = { 
         isBoolean: isBooleanColumn,
-        isBinaryBoolean: isBinaryBooleanColumn, // Track if it's 0/1 based
-        isNumeric: isNumericColumn && !isBooleanColumn, 
+        isBinaryBoolean: isBinaryBooleanColumn,
+        isNumeric: isNumericColumn, 
         isDate: isDateColumn 
       };
     });
@@ -321,10 +497,13 @@ export default function DataTableComponent({
 
       columns.forEach((col) => {
         const colType = get(columnTypes, col);
-        initialFilters[col] = { 
-          value: null, 
-          matchMode: get(colType, 'isBoolean') ? 'equals' : 'contains' 
-        };
+        if (get(colType, 'isBoolean')) {
+          initialFilters[col] = { value: null, matchMode: 'equals' };
+        } else if (get(colType, 'isDate')) {
+          initialFilters[col] = { value: null, matchMode: 'dateRange' };
+        } else {
+          initialFilters[col] = { value: null, matchMode: 'contains' };
+        }
       });
 
       setFilters(initialFilters);
@@ -340,15 +519,15 @@ export default function DataTableComponent({
     columns.forEach((col) => {
       const headerLength = formatHeaderName(col).length;
       const cellLengths = [];
+      const colType = get(columnTypes, col, { isBoolean: false, isNumeric: false, isDate: false });
 
       sampleData.forEach((row) => {
         const value = get(row, col);
         if (!isNil(value)) {
-          cellLengths.push(formatCellValue(value).length);
+          cellLengths.push(formatCellValue(value, colType).length);
         }
       });
 
-      const colType = get(columnTypes, col, { isBoolean: false, isNumeric: false, isDate: false });
       const { isBoolean: isBooleanColumn, isNumeric: isNumericColumn, isDate: isDateColumn } = colType;
 
       let contentWidth = headerLength;
@@ -367,7 +546,7 @@ export default function DataTableComponent({
       if (isBooleanColumn) {
         baseWidth = Math.max(headerWidth, 50);
       } else if (isDateColumn) {
-        baseWidth = Math.max(headerWidth, 100);
+        baseWidth = Math.max(headerWidth, 120);
       } else if (isNumericColumn) {
         baseWidth = Math.max(headerWidth, 70);
       } else {
@@ -377,8 +556,8 @@ export default function DataTableComponent({
       const sortPadding = enableSort ? 30 : 0;
       const finalWidth = baseWidth + sortPadding;
 
-      const minWidth = isBooleanColumn ? 100 : isDateColumn ? 150 : isNumericColumn ? 130 : 140;
-      const maxWidth = isBooleanColumn ? 180 : isDateColumn ? 250 : isNumericColumn ? 250 : 400;
+      const minWidth = isBooleanColumn ? 100 : isDateColumn ? 180 : isNumericColumn ? 130 : 140;
+      const maxWidth = isBooleanColumn ? 180 : isDateColumn ? 280 : isNumericColumn ? 250 : 400;
 
       widths[col] = clamp(finalWidth, minWidth, maxWidth);
     });
@@ -413,6 +592,11 @@ export default function DataTableComponent({
           return true;
         }
 
+        // Date range filter
+        if (get(colType, 'isDate')) {
+          return applyDateFilter(cellValue, filterValue);
+        }
+
         // Numeric filter with operators
         if (get(colType, 'isNumeric')) {
           const parsedFilter = parseNumericFilter(filterValue);
@@ -443,6 +627,10 @@ export default function DataTableComponent({
     if (isEmpty(filteredData)) return sums;
 
     columns.forEach((col) => {
+      const colType = get(columnTypes, col);
+      // Skip date columns for summation
+      if (get(colType, 'isDate')) return;
+      
       const values = filter(
         filteredData.map((row) => get(row, col)),
         (val) => !isNil(val)
@@ -456,7 +644,7 @@ export default function DataTableComponent({
       }
     });
     return sums;
-  }, [filteredData, columns, isNumericValue]);
+  }, [filteredData, columns, isNumericValue, columnTypes]);
 
   const paginatedData = useMemo(() => {
     return sortedData.slice(first, first + rows);
@@ -465,8 +653,19 @@ export default function DataTableComponent({
   const footerTemplate = (column, isFirstColumn = false) => {
     if (!enableSummation) return null;
     
+    const colType = get(columnTypes, column);
+    
+    // No summation for date columns
+    if (get(colType, 'isDate')) {
+      return isFirstColumn ? (
+        <div className="text-left">
+          <strong>Total</strong>
+        </div>
+      ) : null;
+    }
+    
     const sum = get(calculateSums, column);
-    const hasSum = !isNil(sum) && !get(columnTypes, [column, 'isBoolean']);
+    const hasSum = !isNil(sum) && !get(colType, 'isBoolean');
     
     if (isFirstColumn) {
       if (hasSum) {
@@ -486,7 +685,7 @@ export default function DataTableComponent({
       );
     }
     
-    if (get(columnTypes, [column, 'isBoolean'])) return null;
+    if (get(colType, 'isBoolean')) return null;
     if (isNil(sum)) return null;
     
     const formattedSum = sum % 1 === 0
@@ -518,6 +717,17 @@ export default function DataTableComponent({
       </div>
     );
   }, [isTruthyBoolean]);
+
+  const dateBodyTemplate = useCallback((rowData, column) => {
+    const value = get(rowData, column);
+    const formatted = formatDateValue(value);
+
+    return (
+      <div className="text-xs sm:text-sm truncate text-left" title={formatted}>
+        {formatted}
+      </div>
+    );
+  }, []);
 
   const updateFilter = useCallback((col, value) => {
     setFilters(prev => ({
@@ -556,6 +766,17 @@ export default function DataTableComponent({
     );
   }, [filters, updateFilter]);
 
+  const dateFilterElement = useCallback((col) => (options) => {
+    const filterState = get(filters, col);
+    const value = get(filterState, 'value', null);
+    return (
+      <DateRangeFilter
+        value={value}
+        onChange={(newValue) => updateFilter(col, newValue)}
+      />
+    );
+  }, [filters, updateFilter]);
+
   const booleanFilterElement = useCallback((col) => () => {
     const filterState = get(filters, col);
     const value = get(filterState, 'value', null);
@@ -574,11 +795,36 @@ export default function DataTableComponent({
     if (get(colType, 'isBoolean')) {
       return booleanFilterElement(col);
     }
+    if (get(colType, 'isDate')) {
+      return dateFilterElement(col);
+    }
     if (get(colType, 'isNumeric')) {
       return numericFilterElement(col);
     }
     return textFilterElement(col);
-  }, [columnTypes, booleanFilterElement, numericFilterElement, textFilterElement]);
+  }, [columnTypes, booleanFilterElement, dateFilterElement, numericFilterElement, textFilterElement]);
+
+  const getBodyTemplate = useCallback((col) => {
+    const colType = get(columnTypes, col);
+    const isBooleanCol = get(colType, 'isBoolean', false);
+    const isDateCol = get(colType, 'isDate', false);
+    const isNumericCol = get(colType, 'isNumeric', false);
+
+    if (isBooleanCol) {
+      return (rowData) => booleanBodyTemplate(rowData, col);
+    }
+    if (isDateCol) {
+      return (rowData) => dateBodyTemplate(rowData, col);
+    }
+    return (rowData) => (
+      <div
+        className={`text-xs sm:text-sm truncate ${isNumericCol ? 'text-right' : 'text-left'}`}
+        title={formatCellValue(get(rowData, col), colType)}
+      >
+        {formatCellValue(get(rowData, col), colType)}
+      </div>
+    );
+  }, [columnTypes, booleanBodyTemplate, dateBodyTemplate, formatCellValue]);
 
   const onPageChange = (event) => {
     setFirst(event.first);
@@ -640,7 +886,6 @@ export default function DataTableComponent({
         >
           {frozenCols.map((col, index) => {
             const colType = get(columnTypes, col);
-            const isBooleanCol = get(colType, 'isBoolean', false);
             const isNumericCol = get(colType, 'isNumeric', false);
             const isFirstColumn = index === 0;
             return (
@@ -660,24 +905,14 @@ export default function DataTableComponent({
                 showFilterMenu={false}
                 showClearButton={false}
                 footer={footerTemplate(col, isFirstColumn)}
-                body={isBooleanCol
-                  ? (rowData) => booleanBodyTemplate(rowData, col)
-                  : (rowData) => (
-                    <div
-                      className={`text-xs sm:text-sm truncate ${isNumericCol ? 'text-right' : 'text-left'}`}
-                      title={formatCellValue(get(rowData, col))}
-                    >
-                      {formatCellValue(get(rowData, col))}
-                    </div>
-                  )
-                }
+                body={getBodyTemplate(col)}
+                align={isNumericCol ? 'right' : 'left'}
               />
             );
           })}
 
           {regularCols.map((col) => {
             const colType = get(columnTypes, col);
-            const isBooleanCol = get(colType, 'isBoolean', false);
             const isNumericCol = get(colType, 'isNumeric', false);
             return (
               <Column
@@ -695,17 +930,8 @@ export default function DataTableComponent({
                 showFilterMenu={false}
                 showClearButton={false}
                 footer={footerTemplate(col)}
-                body={isBooleanCol
-                  ? (rowData) => booleanBodyTemplate(rowData, col)
-                  : (rowData) => (
-                    <div
-                      className={`text-xs sm:text-sm truncate ${isNumericCol ? 'text-right' : 'text-left'}`}
-                      title={formatCellValue(get(rowData, col))}
-                    >
-                      {formatCellValue(get(rowData, col))}
-                    </div>
-                  )
-                }
+                body={getBodyTemplate(col)}
+                align={isNumericCol ? 'right' : 'left'}
               />
             );
           })}
