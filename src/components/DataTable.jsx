@@ -280,6 +280,7 @@ export default function DataTableComponent({
       let numericCount = 0;
       let dateCount = 0;
       let booleanCount = 0;
+      let binaryCount = 0; // Count of 0/1 values
       let nonNullCount = 0;
 
       sampleData.forEach((row) => {
@@ -289,15 +290,23 @@ export default function DataTableComponent({
           if (isNumericValue(value)) numericCount++;
           if (isString(value) && /^\d{4}-\d{2}-\d{2}/.test(value)) dateCount++;
           if (isBoolean(value)) booleanCount++;
+          // Check for binary 0/1 values (number or string)
+          if (value === 0 || value === 1 || value === '0' || value === '1') {
+            binaryCount++;
+          }
         }
       });
 
       const isNumericColumn = nonNullCount > 0 && numericCount > nonNullCount * 0.8;
       const isDateColumn = nonNullCount > 0 && dateCount > nonNullCount * 0.5;
-      const isBooleanColumn = nonNullCount > 0 && booleanCount > nonNullCount * 0.7;
+      const isTrueBooleanColumn = nonNullCount > 0 && booleanCount > nonNullCount * 0.7;
+      // Infer boolean from 0/1 if all non-null values are binary
+      const isBinaryBooleanColumn = nonNullCount > 0 && binaryCount === nonNullCount && binaryCount >= 1;
+      const isBooleanColumn = isTrueBooleanColumn || isBinaryBooleanColumn;
 
       types[col] = { 
-        isBoolean: isBooleanColumn, 
+        isBoolean: isBooleanColumn,
+        isBinaryBoolean: isBinaryBooleanColumn, // Track if it's 0/1 based
         isNumeric: isNumericColumn && !isBooleanColumn, 
         isDate: isDateColumn 
       };
@@ -391,9 +400,17 @@ export default function DataTableComponent({
         const filterValue = filterObj.value;
         const colType = get(columnTypes, col);
 
-        // Boolean filter
+        // Boolean filter (handles true/false and 1/0)
         if (get(colType, 'isBoolean')) {
-          return cellValue === filterValue;
+          const cellIsTruthy = cellValue === true || cellValue === 1 || cellValue === '1';
+          const cellIsFalsy = cellValue === false || cellValue === 0 || cellValue === '0';
+          
+          if (filterValue === true) {
+            return cellIsTruthy;
+          } else if (filterValue === false) {
+            return cellIsFalsy;
+          }
+          return true;
         }
 
         // Numeric filter with operators
@@ -482,19 +499,25 @@ export default function DataTableComponent({
     );
   };
 
+  // Helper to normalize boolean values (handles true/false and 1/0)
+  const isTruthyBoolean = useCallback((value) => {
+    return value === true || value === 1 || value === '1';
+  }, []);
+
   const booleanBodyTemplate = useCallback((rowData, column) => {
     const value = get(rowData, column);
+    const isTruthy = isTruthyBoolean(value);
 
     return (
       <div className="flex items-center justify-center">
-        {value === true ? (
+        {isTruthy ? (
           <i className="pi pi-check-circle text-green-600 text-lg" title="Yes" />
         ) : (
           <i className="pi pi-times-circle text-red-500 text-lg" title="No" />
         )}
       </div>
     );
-  }, []);
+  }, [isTruthyBoolean]);
 
   const updateFilter = useCallback((col, value) => {
     setFilters(prev => ({
