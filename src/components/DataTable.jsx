@@ -30,7 +30,124 @@ import {
   tail,
   toNumber,
   isNaN as _isNaN,
+  trim,
 } from 'lodash';
+
+/**
+ * Parse numeric filter expression
+ * Supports: <10, >10, <=10, >=10, =10, 10 <> 20 (range)
+ * Also handles spaces: < 10, > 10, <= 10, >= 10, = 10, 10 <> 20
+ * Supports +/- signs: < -10, < - 10, < +10, < + 10
+ */
+function parseNumericFilter(filterValue) {
+  if (isNil(filterValue) || filterValue === '') return null;
+  
+  const str = trim(String(filterValue));
+  
+  // Number pattern that allows optional +/- with space: -10, - 10, +10, + 10, 10
+  const numPattern = '([+-]?\\s*\\d+\\.?\\d*)';
+  
+  // Helper to parse number with potential space after +/-
+  const parseNum = (numStr) => {
+    const cleaned = numStr.replace(/\s+/g, '');
+    return toNumber(cleaned);
+  };
+  
+  // Range: "10 <> 20" or "10<>20" or "-10 <> 20" or "- 10 <> - 20"
+  const rangeRegex = new RegExp(`^${numPattern}\\s*<>\\s*${numPattern}$`);
+  const rangeMatch = str.match(rangeRegex);
+  if (rangeMatch) {
+    const min = parseNum(rangeMatch[1]);
+    const max = parseNum(rangeMatch[2]);
+    if (!_isNaN(min) && !_isNaN(max)) {
+      return { type: 'range', min: Math.min(min, max), max: Math.max(min, max) };
+    }
+  }
+  
+  // Less than or equal: "<=10" or "<= 10" or "<= -10" or "<= - 10"
+  const lteRegex = new RegExp(`^<=\\s*${numPattern}$`);
+  const lteMatch = str.match(lteRegex);
+  if (lteMatch) {
+    const num = parseNum(lteMatch[1]);
+    if (!_isNaN(num)) return { type: 'lte', value: num };
+  }
+  
+  // Greater than or equal: ">=10" or ">= 10" or ">= -10"
+  const gteRegex = new RegExp(`^>=\\s*${numPattern}$`);
+  const gteMatch = str.match(gteRegex);
+  if (gteMatch) {
+    const num = parseNum(gteMatch[1]);
+    if (!_isNaN(num)) return { type: 'gte', value: num };
+  }
+  
+  // Less than: "<10" or "< 10" or "< -10" or "< - 10"
+  const ltRegex = new RegExp(`^<\\s*${numPattern}$`);
+  const ltMatch = str.match(ltRegex);
+  if (ltMatch) {
+    const num = parseNum(ltMatch[1]);
+    if (!_isNaN(num)) return { type: 'lt', value: num };
+  }
+  
+  // Greater than: ">10" or "> 10" or "> -10"
+  const gtRegex = new RegExp(`^>\\s*${numPattern}$`);
+  const gtMatch = str.match(gtRegex);
+  if (gtMatch) {
+    const num = parseNum(gtMatch[1]);
+    if (!_isNaN(num)) return { type: 'gt', value: num };
+  }
+  
+  // Equals: "=10" or "= 10" or "= -10" or "= - 10"
+  const eqRegex = new RegExp(`^=\\s*${numPattern}$`);
+  const eqMatch = str.match(eqRegex);
+  if (eqMatch) {
+    const num = parseNum(eqMatch[1]);
+    if (!_isNaN(num)) return { type: 'eq', value: num };
+  }
+  
+  // Plain number (treat as contains/text search for partial match)
+  const plainNumRegex = new RegExp(`^${numPattern}$`);
+  const plainMatch = str.match(plainNumRegex);
+  if (plainMatch) {
+    const num = parseNum(plainMatch[1]);
+    if (!_isNaN(num)) {
+      return { type: 'contains', value: str.replace(/\s+/g, '') };
+    }
+  }
+  
+  // Not a valid numeric filter, treat as text
+  return { type: 'text', value: str };
+}
+
+/**
+ * Apply numeric filter to a cell value
+ */
+function applyNumericFilter(cellValue, parsedFilter) {
+  if (!parsedFilter) return true;
+  
+  const numCell = isNumber(cellValue) ? cellValue : toNumber(cellValue);
+  
+  switch (parsedFilter.type) {
+    case 'lt':
+      return !_isNaN(numCell) && numCell < parsedFilter.value;
+    case 'gt':
+      return !_isNaN(numCell) && numCell > parsedFilter.value;
+    case 'lte':
+      return !_isNaN(numCell) && numCell <= parsedFilter.value;
+    case 'gte':
+      return !_isNaN(numCell) && numCell >= parsedFilter.value;
+    case 'eq':
+      return !_isNaN(numCell) && numCell === parsedFilter.value;
+    case 'range':
+      return !_isNaN(numCell) && numCell >= parsedFilter.min && numCell <= parsedFilter.max;
+    case 'contains':
+      // For plain numbers, do a string contains search
+      return includes(String(cellValue ?? ''), parsedFilter.value);
+    case 'text':
+    default:
+      // Fallback to text search
+      return includes(toLower(String(cellValue ?? '')), toLower(parsedFilter.value));
+  }
+}
 
 function CustomTriStateCheckbox({ value, onChange }) {
   const handleClick = () => {
@@ -274,10 +391,18 @@ export default function DataTableComponent({
         const filterValue = filterObj.value;
         const colType = get(columnTypes, col);
 
+        // Boolean filter
         if (get(colType, 'isBoolean')) {
           return cellValue === filterValue;
         }
 
+        // Numeric filter with operators
+        if (get(colType, 'isNumeric')) {
+          const parsedFilter = parseNumericFilter(filterValue);
+          return applyNumericFilter(cellValue, parsedFilter);
+        }
+
+        // Text filter (default)
         const strCell = toLower(String(cellValue ?? ''));
         const strFilter = toLower(String(filterValue));
         return includes(strCell, strFilter);
@@ -386,9 +511,24 @@ export default function DataTableComponent({
       <InputText
         value={value}
         onChange={(e) => updateFilter(col, e.target.value || null)}
-        placeholder={`Search...`}
+        placeholder="Search..."
         className="p-column-filter"
         style={{ width: '100%' }}
+      />
+    );
+  }, [filters, updateFilter]);
+
+  const numericFilterElement = useCallback((col) => (options) => {
+    const filterState = get(filters, col);
+    const value = isNil(get(filterState, 'value')) ? '' : filterState.value;
+    return (
+      <InputText
+        value={value}
+        onChange={(e) => updateFilter(col, e.target.value || null)}
+        placeholder="<, >, <=, >=, =, <>"
+        className="p-column-filter"
+        style={{ width: '100%' }}
+        title="Numeric filters: <10, >10, <=10, >=10, =10, 10<>20 (range)"
       />
     );
   }, [filters, updateFilter]);
@@ -411,8 +551,11 @@ export default function DataTableComponent({
     if (get(colType, 'isBoolean')) {
       return booleanFilterElement(col);
     }
+    if (get(colType, 'isNumeric')) {
+      return numericFilterElement(col);
+    }
     return textFilterElement(col);
-  }, [columnTypes, booleanFilterElement, textFilterElement]);
+  }, [columnTypes, booleanFilterElement, numericFilterElement, textFilterElement]);
 
   const onPageChange = (event) => {
     setFirst(event.first);
