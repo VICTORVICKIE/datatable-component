@@ -1,17 +1,38 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { DataTable, DataTableFilterMeta, SortOrder } from 'primereact/datatable';
-import { Column, ColumnFilterElementTemplateOptions } from 'primereact/column';
+import { DataTable } from 'primereact/datatable';
+import { Column } from 'primereact/column';
 import { InputText } from 'primereact/inputtext';
 import { Paginator } from 'primereact/paginator';
+import {
+  isNil,
+  isNumber,
+  isFinite as _isFinite,
+  isEmpty,
+  keys,
+  uniq,
+  flatMap,
+  startCase,
+  take,
+  sumBy,
+  orderBy,
+  filter,
+  get,
+  clamp,
+  debounce,
+  every,
+  toLower,
+  includes,
+  isBoolean,
+  isString,
+  head,
+  tail,
+  toNumber,
+  isNaN as _isNaN,
+} from 'lodash';
 
-interface CustomTriStateProps {
-  value: boolean | null;
-  onChange: (value: boolean | null) => void;
-}
-
-function CustomTriStateCheckbox({ value, onChange }: CustomTriStateProps) {
+function CustomTriStateCheckbox({ value, onChange }) {
   const handleClick = () => {
     if (value === null) {
       onChange(true);
@@ -45,17 +66,6 @@ function CustomTriStateCheckbox({ value, onChange }: CustomTriStateProps) {
   );
 }
 
-interface DataTableComponentProps {
-  data: Record<string, any>[];
-  rowsPerPageOptions?: number[];
-  defaultRows?: number;
-  scrollable?: boolean;
-  scrollHeight?: string;
-  enableSort?: boolean;
-  enableFilter?: boolean;
-  enableSummation?: boolean;
-}
-
 export default function DataTableComponent({
   data,
   rowsPerPageOptions = [10, 25, 50, 100],
@@ -65,12 +75,12 @@ export default function DataTableComponent({
   enableSort = true,
   enableFilter = true,
   enableSummation = true,
-}: DataTableComponentProps) {
+}) {
   const [first, setFirst] = useState(0);
   const [rows, setRows] = useState(defaultRows);
-  const [filters, setFilters] = useState<DataTableFilterMeta>({});
-  const [scrollHeightValue, setScrollHeightValue] = useState<string>('600px');
-  const [multiSortMeta, setMultiSortMeta] = useState<{ field: string; order: SortOrder }[]>([]);
+  const [filters, setFilters] = useState({});
+  const [scrollHeightValue, setScrollHeightValue] = useState('600px');
+  const [multiSortMeta, setMultiSortMeta] = useState([]);
 
   useEffect(() => {
     setRows(defaultRows);
@@ -78,7 +88,7 @@ export default function DataTableComponent({
   }, [defaultRows]);
 
   useEffect(() => {
-    const updateScrollHeight = () => {
+    const updateScrollHeight = debounce(() => {
       if (scrollHeight) {
         setScrollHeightValue(scrollHeight);
         return;
@@ -91,55 +101,51 @@ export default function DataTableComponent({
       } else {
         setScrollHeightValue('600px');
       }
-    };
+    }, 100);
 
     updateScrollHeight();
     window.addEventListener('resize', updateScrollHeight);
-    return () => window.removeEventListener('resize', updateScrollHeight);
+    return () => {
+      updateScrollHeight.cancel();
+      window.removeEventListener('resize', updateScrollHeight);
+    };
   }, [scrollHeight]);
 
   const safeData = useMemo(() => {
-    if (!data || !Array.isArray(data)) return [];
+    if (!Array.isArray(data) || isEmpty(data)) return [];
     return data;
   }, [data]);
 
   const columns = useMemo(() => {
-    if (!safeData || safeData.length === 0) return [];
-    const allKeys = new Set<string>();
-    safeData.forEach((item) => {
-      if (item && typeof item === 'object') {
-        Object.keys(item).forEach((key) => allKeys.add(key));
-      }
-    });
-    return Array.from(allKeys);
+    if (isEmpty(safeData)) return [];
+    const allKeys = uniq(flatMap(safeData, (item) => 
+      item && typeof item === 'object' ? keys(item) : []
+    ));
+    return allKeys;
   }, [safeData]);
 
   const frozenCols = useMemo(
-    () => columns.length > 0 ? [columns[0]] : [],
+    () => isEmpty(columns) ? [] : [head(columns)],
     [columns]
   );
+  
   const regularCols = useMemo(
-    () => columns.slice(1),
+    () => tail(columns),
     [columns]
   );
 
-  const isNumeric = useCallback((value: any): boolean => {
-    if (value === null || value === undefined) return false;
-    return typeof value === 'number' || (!isNaN(parseFloat(value)) && isFinite(value));
+  const isNumericValue = useCallback((value) => {
+    if (isNil(value)) return false;
+    return isNumber(value) || (!_isNaN(parseFloat(value)) && _isFinite(value));
   }, []);
 
-  const formatHeaderName = useCallback((key: string): string => {
-    return key
-      .split('__')
-      .join(' ')
-      .split('_')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+  const formatHeaderName = useCallback((key) => {
+    return startCase(key.split('__').join(' ').split('_').join(' '));
   }, []);
 
-  const formatCellValue = useCallback((value: any): string => {
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'number') {
+  const formatCellValue = useCallback((value) => {
+    if (isNil(value)) return '';
+    if (isNumber(value)) {
       return value % 1 === 0
         ? value.toLocaleString('en-US')
         : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -148,11 +154,10 @@ export default function DataTableComponent({
   }, []);
 
   const columnTypes = useMemo(() => {
-    const types: Record<string, { isBoolean: boolean; isNumeric: boolean; isDate: boolean }> = {};
-    if (!safeData || safeData.length === 0) return types;
+    const types = {};
+    if (isEmpty(safeData)) return types;
 
-    const sampleSize = Math.min(100, safeData.length);
-    const sampleData = safeData.slice(0, sampleSize);
+    const sampleData = take(safeData, 100);
 
     columns.forEach((col) => {
       let numericCount = 0;
@@ -161,15 +166,12 @@ export default function DataTableComponent({
       let nonNullCount = 0;
 
       sampleData.forEach((row) => {
-        const value = row?.[col];
-        if (value !== null && value !== undefined) {
+        const value = get(row, col);
+        if (!isNil(value)) {
           nonNullCount++;
-
-          if (isNumeric(value)) numericCount++;
-          if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) dateCount++;
-          if (value === true || value === false) {
-            booleanCount++;
-          }
+          if (isNumericValue(value)) numericCount++;
+          if (isString(value) && /^\d{4}-\d{2}-\d{2}/.test(value)) dateCount++;
+          if (isBoolean(value)) booleanCount++;
         }
       });
 
@@ -177,23 +179,26 @@ export default function DataTableComponent({
       const isDateColumn = nonNullCount > 0 && dateCount > nonNullCount * 0.5;
       const isBooleanColumn = nonNullCount > 0 && booleanCount > nonNullCount * 0.7;
 
-      types[col] = { isBoolean: isBooleanColumn, isNumeric: isNumericColumn && !isBooleanColumn, isDate: isDateColumn };
+      types[col] = { 
+        isBoolean: isBooleanColumn, 
+        isNumeric: isNumericColumn && !isBooleanColumn, 
+        isDate: isDateColumn 
+      };
     });
 
     return types;
-  }, [safeData, columns, isNumeric]);
+  }, [safeData, columns, isNumericValue]);
 
   useEffect(() => {
-    if (enableFilter && columns.length > 0) {
-      const initialFilters: DataTableFilterMeta = {};
+    if (enableFilter && !isEmpty(columns)) {
+      const initialFilters = {};
 
       columns.forEach((col) => {
-        const colType = columnTypes[col];
-        if (colType?.isBoolean) {
-          initialFilters[col] = { value: null, matchMode: 'equals' };
-        } else {
-          initialFilters[col] = { value: null, matchMode: 'contains' };
-        }
+        const colType = get(columnTypes, col);
+        initialFilters[col] = { 
+          value: null, 
+          matchMode: get(colType, 'isBoolean') ? 'equals' : 'contains' 
+        };
       });
 
       setFilters(initialFilters);
@@ -201,32 +206,29 @@ export default function DataTableComponent({
   }, [columns, enableFilter, columnTypes]);
 
   const calculateColumnWidths = useMemo(() => {
-    const widths: Record<string, number> = {};
-    if (!safeData || safeData.length === 0) return widths;
+    const widths = {};
+    if (isEmpty(safeData)) return widths;
 
-    const sampleSize = Math.min(100, safeData.length);
-    const sampleData = safeData.slice(0, sampleSize);
+    const sampleData = take(safeData, 100);
 
     columns.forEach((col) => {
       const headerLength = formatHeaderName(col).length;
-      const cellLengths: number[] = [];
+      const cellLengths = [];
 
       sampleData.forEach((row) => {
-        const value = row?.[col];
-        if (value !== null && value !== undefined) {
-          const formatted = formatCellValue(value);
-          cellLengths.push(formatted.length);
+        const value = get(row, col);
+        if (!isNil(value)) {
+          cellLengths.push(formatCellValue(value).length);
         }
       });
 
-      const { isBoolean: isBooleanColumn, isNumeric: isNumericColumn, isDate: isDateColumn } = columnTypes[col] || { isBoolean: false, isNumeric: false, isDate: false };
+      const colType = get(columnTypes, col, { isBoolean: false, isNumeric: false, isDate: false });
+      const { isBoolean: isBooleanColumn, isNumeric: isNumericColumn, isDate: isDateColumn } = colType;
 
-      let contentWidth = 0;
+      let contentWidth = headerLength;
 
-      if (cellLengths.length === 0) {
-        contentWidth = headerLength;
-      } else {
-        const sortedLengths = [...cellLengths].sort((a, b) => a - b);
+      if (!isEmpty(cellLengths)) {
+        const sortedLengths = orderBy(cellLengths);
         const medianLength = sortedLengths[Math.floor(sortedLengths.length / 2)];
         const percentile75 = sortedLengths[Math.floor(sortedLengths.length * 0.75)];
         const percentile95 = sortedLengths[Math.floor(sortedLengths.length * 0.95)];
@@ -234,114 +236,95 @@ export default function DataTableComponent({
       }
 
       const headerWidth = headerLength * 9;
-      let baseWidth: number;
+      let baseWidth;
 
       if (isBooleanColumn) {
-        const contentMin = 50;
-        baseWidth = Math.max(headerWidth, contentMin);
+        baseWidth = Math.max(headerWidth, 50);
       } else if (isDateColumn) {
-        const contentMin = 100;
-        baseWidth = Math.max(headerWidth, contentMin);
+        baseWidth = Math.max(headerWidth, 100);
       } else if (isNumericColumn) {
-        const contentMin = 70;
-        baseWidth = Math.max(headerWidth, contentMin);
+        baseWidth = Math.max(headerWidth, 70);
       } else {
         baseWidth = Math.max(contentWidth * 9, headerWidth);
       }
 
       const sortPadding = enableSort ? 30 : 0;
-      let finalWidth = baseWidth + sortPadding;
+      const finalWidth = baseWidth + sortPadding;
 
       const minWidth = isBooleanColumn ? 100 : isDateColumn ? 150 : isNumericColumn ? 130 : 140;
       const maxWidth = isBooleanColumn ? 180 : isDateColumn ? 250 : isNumericColumn ? 250 : 400;
 
-      widths[col] = Math.max(minWidth, Math.min(finalWidth, maxWidth));
+      widths[col] = clamp(finalWidth, minWidth, maxWidth);
     });
 
     return widths;
   }, [safeData, columns, enableSort, formatHeaderName, formatCellValue, columnTypes]);
 
   const filteredData = useMemo(() => {
-    if (!safeData || safeData.length === 0) return [];
+    if (isEmpty(safeData)) return [];
 
-    return safeData.filter((row) => {
+    return filter(safeData, (row) => {
       if (!row || typeof row !== 'object') return false;
 
-      return columns.every((col) => {
-        const filter = filters[col] as { value: any; matchMode: string } | undefined;
-        if (!filter || filter.value === null || filter.value === '') return true;
+      return every(columns, (col) => {
+        const filterObj = get(filters, col);
+        if (!filterObj || isNil(filterObj.value) || filterObj.value === '') return true;
 
-        const cellValue = row[col];
-        const filterValue = filter.value;
-        const colType = columnTypes[col];
+        const cellValue = get(row, col);
+        const filterValue = filterObj.value;
+        const colType = get(columnTypes, col);
 
-        if (colType?.isBoolean) {
+        if (get(colType, 'isBoolean')) {
           return cellValue === filterValue;
         }
 
-        const strCell = String(cellValue ?? '').toLowerCase();
-        const strFilter = String(filterValue).toLowerCase();
-        return strCell.includes(strFilter);
+        const strCell = toLower(String(cellValue ?? ''));
+        const strFilter = toLower(String(filterValue));
+        return includes(strCell, strFilter);
       });
     });
   }, [safeData, filters, columns, columnTypes]);
 
   const sortedData = useMemo(() => {
-    if (!filteredData || filteredData.length === 0 || multiSortMeta.length === 0) {
+    if (isEmpty(filteredData) || isEmpty(multiSortMeta)) {
       return filteredData;
     }
 
-    return [...filteredData].sort((a, b) => {
-      for (const sortInfo of multiSortMeta) {
-        const { field, order } = sortInfo;
-        if (!order) continue;
-
-        const valA = a[field];
-        const valB = b[field];
-
-        if (valA === null || valA === undefined) return order === 1 ? 1 : -1;
-        if (valB === null || valB === undefined) return order === 1 ? -1 : 1;
-
-        let comparison = 0;
-        if (typeof valA === 'number' && typeof valB === 'number') {
-          comparison = valA - valB;
-        } else {
-          comparison = String(valA).localeCompare(String(valB), undefined, { numeric: true, sensitivity: 'base' });
-        }
-
-        if (comparison !== 0) {
-          return order === 1 ? comparison : -comparison;
-        }
-      }
-      return 0;
-    });
+    const fields = multiSortMeta.map(s => s.field);
+    const orders = multiSortMeta.map(s => s.order === 1 ? 'asc' : 'desc');
+    
+    return orderBy(filteredData, fields, orders);
   }, [filteredData, multiSortMeta]);
 
   const calculateSums = useMemo(() => {
-    const sums: Record<string, number> = {};
-    if (filteredData.length === 0) return sums;
+    const sums = {};
+    if (isEmpty(filteredData)) return sums;
 
     columns.forEach((col) => {
-      const values = filteredData.map((row) => row?.[col]).filter((val) => val !== null && val !== undefined);
-      if (values.length > 0 && isNumeric(values[0])) {
-        sums[col] = values.reduce((sum, val) => {
-          const numVal = typeof val === 'number' ? val : parseFloat(val);
-          return sum + (isNaN(numVal) ? 0 : numVal);
-        }, 0);
+      const values = filter(
+        filteredData.map((row) => get(row, col)),
+        (val) => !isNil(val)
+      );
+      
+      if (!isEmpty(values) && isNumericValue(head(values))) {
+        sums[col] = sumBy(values, (val) => {
+          const numVal = isNumber(val) ? val : toNumber(val);
+          return _isNaN(numVal) ? 0 : numVal;
+        });
       }
     });
     return sums;
-  }, [filteredData, columns, isNumeric]);
+  }, [filteredData, columns, isNumericValue]);
 
   const paginatedData = useMemo(() => {
     return sortedData.slice(first, first + rows);
   }, [sortedData, first, rows]);
 
-  const footerTemplate = (column: string, isFirstColumn: boolean = false) => {
+  const footerTemplate = (column, isFirstColumn = false) => {
     if (!enableSummation) return null;
     
-    const sum = calculateSums[column];
-    const hasSum = sum !== undefined && !columnTypes[column]?.isBoolean;
+    const sum = get(calculateSums, column);
+    const hasSum = !isNil(sum) && !get(columnTypes, [column, 'isBoolean']);
     
     if (isFirstColumn) {
       if (hasSum) {
@@ -361,8 +344,8 @@ export default function DataTableComponent({
       );
     }
     
-    if (columnTypes[column]?.isBoolean) return null;
-    if (sum === undefined) return null;
+    if (get(columnTypes, [column, 'isBoolean'])) return null;
+    if (isNil(sum)) return null;
     
     const formattedSum = sum % 1 === 0
       ? sum.toLocaleString('en-US')
@@ -374,8 +357,8 @@ export default function DataTableComponent({
     );
   };
 
-  const booleanBodyTemplate = useCallback((rowData: Record<string, any>, column: string) => {
-    const value = rowData[column];
+  const booleanBodyTemplate = useCallback((rowData, column) => {
+    const value = get(rowData, column);
 
     return (
       <div className="flex items-center justify-center">
@@ -388,17 +371,17 @@ export default function DataTableComponent({
     );
   }, []);
 
-  const updateFilter = useCallback((col: string, value: any) => {
+  const updateFilter = useCallback((col, value) => {
     setFilters(prev => ({
       ...prev,
-      [col]: { ...(prev[col] as any), value }
+      [col]: { ...get(prev, col), value }
     }));
     setFirst(0);
   }, []);
 
-  const textFilterElement = useCallback((col: string) => (options: ColumnFilterElementTemplateOptions) => {
-    const filterState = filters[col] as { value: any; matchMode: string } | undefined;
-    const value = filterState?.value === null || filterState?.value === undefined ? '' : filterState.value;
+  const textFilterElement = useCallback((col) => (options) => {
+    const filterState = get(filters, col);
+    const value = isNil(get(filterState, 'value')) ? '' : filterState.value;
     return (
       <InputText
         value={value}
@@ -410,9 +393,9 @@ export default function DataTableComponent({
     );
   }, [filters, updateFilter]);
 
-  const booleanFilterElement = useCallback((col: string) => () => {
-    const filterState = filters[col] as { value: any; matchMode: string } | undefined;
-    const value = filterState?.value === undefined ? null : filterState.value;
+  const booleanFilterElement = useCallback((col) => () => {
+    const filterState = get(filters, col);
+    const value = get(filterState, 'value', null);
     return (
       <div className="flex items-center justify-center">
         <CustomTriStateCheckbox
@@ -423,21 +406,20 @@ export default function DataTableComponent({
     );
   }, [filters, updateFilter]);
 
-  const getFilterElement = useCallback((col: string) => {
-    const colType = columnTypes[col];
-    if (colType?.isBoolean) {
+  const getFilterElement = useCallback((col) => {
+    const colType = get(columnTypes, col);
+    if (get(colType, 'isBoolean')) {
       return booleanFilterElement(col);
-    } else {
-      return textFilterElement(col);
     }
+    return textFilterElement(col);
   }, [columnTypes, booleanFilterElement, textFilterElement]);
 
-  const onPageChange = (event: any) => {
+  const onPageChange = (event) => {
     setFirst(event.first);
     setRows(event.rows);
   };
 
-  if (!safeData || safeData.length === 0) {
+  if (isEmpty(safeData)) {
     return (
       <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
         <i className="pi pi-inbox text-4xl text-gray-400 mb-4"></i>
@@ -491,9 +473,9 @@ export default function DataTableComponent({
           filterDisplay={enableFilter ? "row" : undefined}
         >
           {frozenCols.map((col, index) => {
-            const colType = columnTypes[col];
-            const isBoolean = colType?.isBoolean || false;
-            const isNumeric = colType?.isNumeric || false;
+            const colType = get(columnTypes, col);
+            const isBooleanCol = get(colType, 'isBoolean', false);
+            const isNumericCol = get(colType, 'isNumeric', false);
             const isFirstColumn = index === 0;
             return (
               <Column
@@ -503,23 +485,23 @@ export default function DataTableComponent({
                 sortable={enableSort}
                 frozen
                 style={{
-                  minWidth: `${calculateColumnWidths[col] || 120}px`,
-                  width: `${calculateColumnWidths[col] || 120}px`,
-                  maxWidth: `${calculateColumnWidths[col] || 200}px`
+                  minWidth: `${get(calculateColumnWidths, col, 120)}px`,
+                  width: `${get(calculateColumnWidths, col, 120)}px`,
+                  maxWidth: `${get(calculateColumnWidths, col, 200)}px`
                 }}
                 filter={enableFilter}
                 filterElement={enableFilter ? getFilterElement(col) : undefined}
                 showFilterMenu={false}
                 showClearButton={false}
                 footer={footerTemplate(col, isFirstColumn)}
-                body={isBoolean
+                body={isBooleanCol
                   ? (rowData) => booleanBodyTemplate(rowData, col)
                   : (rowData) => (
                     <div
-                      className={`text-xs sm:text-sm truncate ${isNumeric ? 'text-right' : 'text-left'}`}
-                      title={formatCellValue(rowData[col])}
+                      className={`text-xs sm:text-sm truncate ${isNumericCol ? 'text-right' : 'text-left'}`}
+                      title={formatCellValue(get(rowData, col))}
                     >
-                      {formatCellValue(rowData[col])}
+                      {formatCellValue(get(rowData, col))}
                     </div>
                   )
                 }
@@ -528,9 +510,9 @@ export default function DataTableComponent({
           })}
 
           {regularCols.map((col) => {
-            const colType = columnTypes[col];
-            const isBoolean = colType?.isBoolean || false;
-            const isNumeric = colType?.isNumeric || false;
+            const colType = get(columnTypes, col);
+            const isBooleanCol = get(colType, 'isBoolean', false);
+            const isNumericCol = get(colType, 'isNumeric', false);
             return (
               <Column
                 key={col}
@@ -538,23 +520,23 @@ export default function DataTableComponent({
                 header={formatHeaderName(col)}
                 sortable={enableSort}
                 style={{
-                  minWidth: `${calculateColumnWidths[col] || 120}px`,
-                  width: `${calculateColumnWidths[col] || 120}px`,
-                  maxWidth: `${calculateColumnWidths[col] || 400}px`
+                  minWidth: `${get(calculateColumnWidths, col, 120)}px`,
+                  width: `${get(calculateColumnWidths, col, 120)}px`,
+                  maxWidth: `${get(calculateColumnWidths, col, 400)}px`
                 }}
                 filter={enableFilter}
                 filterElement={enableFilter ? getFilterElement(col) : undefined}
                 showFilterMenu={false}
                 showClearButton={false}
                 footer={footerTemplate(col)}
-                body={isBoolean
+                body={isBooleanCol
                   ? (rowData) => booleanBodyTemplate(rowData, col)
                   : (rowData) => (
                     <div
-                      className={`text-xs sm:text-sm truncate ${isNumeric ? 'text-right' : 'text-left'}`}
-                      title={formatCellValue(rowData[col])}
+                      className={`text-xs sm:text-sm truncate ${isNumericCol ? 'text-right' : 'text-left'}`}
+                      title={formatCellValue(get(rowData, col))}
                     >
-                      {formatCellValue(rowData[col])}
+                      {formatCellValue(get(rowData, col))}
                     </div>
                   )
                 }

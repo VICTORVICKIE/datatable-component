@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "lodash": "^4.17.21",
     "next": "16.0.10",
     "primeicons": "^7.0.0",
     "primereact": "^10.9.7",
@@ -16,10 +17,6 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "tailwindcss": "^4"
   }
 }

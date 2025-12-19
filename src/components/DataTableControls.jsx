@@ -1,17 +1,7 @@
 'use client';
 
 import React from 'react';
-
-interface DataTableControlsProps {
-  enableSort: boolean;
-  enableFilter: boolean;
-  enableSummation: boolean;
-  rowsPerPageOptions: number[];
-  onSortChange: (enabled: boolean) => void;
-  onFilterChange: (enabled: boolean) => void;
-  onSummationChange: (enabled: boolean) => void;
-  onRowsPerPageOptionsChange: (options: number[]) => void;
-}
+import { chain, isEmpty } from 'lodash';
 
 export default function DataTableControls({
   enableSort,
@@ -22,7 +12,7 @@ export default function DataTableControls({
   onFilterChange,
   onSummationChange,
   onRowsPerPageOptionsChange,
-}: DataTableControlsProps) {
+}) {
   const [isExpanded, setIsExpanded] = React.useState(true);
   const [customOptions, setCustomOptions] = React.useState(rowsPerPageOptions.join(', '));
 
@@ -30,14 +20,18 @@ export default function DataTableControls({
     setCustomOptions(rowsPerPageOptions.join(', '));
   }, [rowsPerPageOptions]);
 
-  const handleOptionsChange = (value: string) => {
+  const handleOptionsChange = (value) => {
     setCustomOptions(value);
-    const options = value
+    
+    const options = chain(value)
       .split(',')
-      .map((v) => parseInt(v.trim()))
-      .filter((v) => !isNaN(v) && v > 0)
-      .sort((a, b) => a - b);
-    if (options.length > 0) {
+      .map(v => parseInt(v.trim(), 10))
+      .filter(v => !isNaN(v) && v > 0)
+      .uniq()
+      .sortBy()
+      .value();
+    
+    if (!isEmpty(options)) {
       onRowsPerPageOptionsChange(options);
     }
   };
@@ -178,4 +172,3 @@ export default function DataTableControls({
     </div>
   );
 }
-
