@@ -1,15 +1,27 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import DataTableComponent from '@/components/DataTable';
 import DataTableControls from '@/components/DataTableControls';
 import data from '@/resource/data';
+import { uniq, flatMap, keys, isEmpty } from 'lodash';
 
 export default function Home() {
   const [enableSort, setEnableSort] = useState(true);
   const [enableFilter, setEnableFilter] = useState(true);
   const [enableSummation, setEnableSummation] = useState(true);
   const [rowsPerPageOptions, setRowsPerPageOptions] = useState([5, 10, 25, 50, 100, 200]);
+  const [optionColumns, setOptionColumns] = useState([]);
+  const [redFields, setRedFields] = useState([]);
+  const [greenFields, setGreenFields] = useState([]);
+
+  // Extract column names from data
+  const columns = useMemo(() => {
+    if (!Array.isArray(data) || isEmpty(data)) return [];
+    return uniq(flatMap(data, (item) => 
+      item && typeof item === 'object' ? keys(item) : []
+    ));
+  }, []);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -37,10 +49,17 @@ export default function Home() {
             enableFilter={enableFilter}
             enableSummation={enableSummation}
             rowsPerPageOptions={rowsPerPageOptions}
+            columns={columns}
+            optionColumns={optionColumns}
+            redFields={redFields}
+            greenFields={greenFields}
             onSortChange={setEnableSort}
             onFilterChange={setEnableFilter}
             onSummationChange={setEnableSummation}
             onRowsPerPageOptionsChange={setRowsPerPageOptions}
+            onOptionColumnsChange={setOptionColumns}
+            onRedFieldsChange={setRedFields}
+            onGreenFieldsChange={setGreenFields}
           />
 
           <DataTableComponent
@@ -51,10 +70,12 @@ export default function Home() {
             enableSort={enableSort}
             enableFilter={enableFilter}
             enableSummation={enableSummation}
+            optionColumns={optionColumns}
+            redFields={redFields}
+            greenFields={greenFields}
           />
         </div>
       </main>
     </div>
   );
 }
-

@@ -736,3 +736,12 @@ body {
 .p-datepicker table td.p-datepicker-other-month > span.p-highlight {
     background: #93c5fd;
 }
+
+/* Custom Multiselect Filter Styles */
+.multiselect-filter-container {
+    width: 100%;
+}
+
+.multiselect-filter-container input[type="checkbox"] {
+    cursor: pointer;
+}

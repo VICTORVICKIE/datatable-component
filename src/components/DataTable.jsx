@@ -33,6 +33,9 @@ import {
   toNumber,
   isNaN as _isNaN,
   trim,
+  compact,
+  some,
+  isArray,
 } from 'lodash';
 
 // Date format patterns for detection
@@ -301,6 +304,152 @@ function CustomTriStateCheckbox({ value, onChange }) {
   );
 }
 
+function MultiselectFilter({ value, options, onChange, placeholder = "Select..." }) {
+  const [searchTerm, setSearchTerm] = React.useState('');
+  const [isOpen, setIsOpen] = React.useState(false);
+  const containerRef = React.useRef(null);
+  const selectedValues = value || [];
+
+  // Close dropdown when clicking outside
+  React.useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (containerRef.current && !containerRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filteredOptions = React.useMemo(() => {
+    if (!searchTerm) return options;
+    const term = toLower(searchTerm);
+    return filter(options, opt => includes(toLower(String(opt.label)), term));
+  }, [options, searchTerm]);
+
+  const toggleValue = (val) => {
+    if (includes(selectedValues, val)) {
+      onChange(filter(selectedValues, v => v !== val));
+    } else {
+      onChange([...selectedValues, val]);
+    }
+  };
+
+  const clearAll = () => {
+    onChange([]);
+    setSearchTerm('');
+  };
+
+  const selectAll = () => {
+    onChange(options.map(o => o.value));
+  };
+
+  return (
+    <div ref={containerRef} className="relative multiselect-filter-container">
+      {/* Trigger Button */}
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className={`w-full flex items-center justify-between px-2 py-1.5 text-xs border rounded bg-white hover:border-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
+          isEmpty(selectedValues) ? 'border-gray-300 text-gray-500' : 'border-blue-400 text-blue-700 bg-blue-50'
+        }`}
+      >
+        <span className="truncate">
+          {isEmpty(selectedValues) ? placeholder : `${selectedValues.length} Filter${selectedValues.length !== 1 ? 's' : ''}`}
+        </span>
+        <i className={`pi ${isOpen ? 'pi-chevron-up' : 'pi-chevron-down'} text-[10px] ml-1 flex-shrink-0`}></i>
+      </button>
+
+      {/* Dropdown */}
+      {isOpen && (
+        <div className="absolute z-[9999] w-56 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" style={{ minWidth: '200px' }}>
+          {/* Search Input */}
+          <div className="p-2 border-b border-gray-100">
+            <div className="relative">
+              <i className="pi pi-search absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]"></i>
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search..."
+                className="w-full pl-7 pr-7 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                autoFocus
+                onClick={(e) => e.stopPropagation()}
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setSearchTerm(''); }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <i className="pi pi-times text-[10px]"></i>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="px-2 py-1 border-b border-gray-100 flex gap-2 text-[10px]">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); selectAll(); }}
+              className="text-blue-600 hover:text-blue-800 transition-colors"
+            >
+              All
+            </button>
+            <span className="text-gray-300">|</span>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); clearAll(); }}
+              className="text-gray-500 hover:text-red-600 transition-colors"
+            >
+              Clear
+            </button>
+            {!isEmpty(selectedValues) && (
+              <>
+                <span className="text-gray-300">|</span>
+                <span className="text-gray-500">{selectedValues.length} selected</span>
+              </>
+            )}
+          </div>
+
+          {/* Options List */}
+          <div className="max-h-40 overflow-y-auto">
+            {isEmpty(filteredOptions) ? (
+              <div className="px-3 py-3 text-center text-xs text-gray-500">
+                No matches
+              </div>
+            ) : (
+              filteredOptions.map(opt => {
+                const isSelected = includes(selectedValues, opt.value);
+                return (
+                  <label
+                    key={opt.value}
+                    className={`flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors text-xs ${
+                      isSelected ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'
+                    }`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleValue(opt.value)}
+                      className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    />
+                    <span className={`truncate ${isSelected ? 'text-blue-900 font-medium' : 'text-gray-700'}`}>
+                      {opt.label}
+                    </span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DateRangeFilter({ value, onChange }) {
   const handleChange = (e) => {
     onChange(e.value);
@@ -352,6 +501,9 @@ export default function DataTableComponent({
   enableSort = true,
   enableFilter = true,
   enableSummation = true,
+  optionColumns = [],
+  redFields = [],
+  greenFields = [],
 }) {
   const [first, setFirst] = useState(0);
   const [rows, setRows] = useState(defaultRows);
@@ -491,13 +643,33 @@ export default function DataTableComponent({
     return types;
   }, [safeData, columns, isNumericValue]);
 
+  // Compute unique values for option columns (for multiselect filters)
+  const optionColumnValues = useMemo(() => {
+    const values = {};
+    if (isEmpty(safeData) || isEmpty(optionColumns)) return values;
+
+    optionColumns.forEach((col) => {
+      const uniqueVals = compact(uniq(safeData.map((row) => get(row, col))));
+      values[col] = orderBy(uniqueVals).map((val) => ({
+        label: String(val),
+        value: val,
+      }));
+    });
+
+    return values;
+  }, [safeData, optionColumns]);
+
   useEffect(() => {
     if (enableFilter && !isEmpty(columns)) {
       const initialFilters = {};
 
       columns.forEach((col) => {
         const colType = get(columnTypes, col);
-        if (get(colType, 'isBoolean')) {
+        const isOptionColumn = includes(optionColumns, col);
+        
+        if (isOptionColumn) {
+          initialFilters[col] = { value: null, matchMode: 'in' };
+        } else if (get(colType, 'isBoolean')) {
           initialFilters[col] = { value: null, matchMode: 'equals' };
         } else if (get(colType, 'isDate')) {
           initialFilters[col] = { value: null, matchMode: 'dateRange' };
@@ -508,7 +680,7 @@ export default function DataTableComponent({
 
       setFilters(initialFilters);
     }
-  }, [columns, enableFilter, columnTypes]);
+  }, [columns, enableFilter, columnTypes, optionColumns]);
 
   const calculateColumnWidths = useMemo(() => {
     const widths = {};
@@ -574,10 +746,19 @@ export default function DataTableComponent({
       return every(columns, (col) => {
         const filterObj = get(filters, col);
         if (!filterObj || isNil(filterObj.value) || filterObj.value === '') return true;
+        
+        // Handle empty arrays for multiselect
+        if (isArray(filterObj.value) && isEmpty(filterObj.value)) return true;
 
         const cellValue = get(row, col);
         const filterValue = filterObj.value;
         const colType = get(columnTypes, col);
+        const isOptionColumn = includes(optionColumns, col);
+
+        // Multiselect filter (option columns)
+        if (isOptionColumn && isArray(filterValue)) {
+          return some(filterValue, (v) => v === cellValue || String(v) === String(cellValue));
+        }
 
         // Boolean filter (handles true/false and 1/0)
         if (get(colType, 'isBoolean')) {
@@ -609,7 +790,7 @@ export default function DataTableComponent({
         return includes(strCell, strFilter);
       });
     });
-  }, [safeData, filters, columns, columnTypes]);
+  }, [safeData, filters, columns, columnTypes, optionColumns]);
 
   const sortedData = useMemo(() => {
     if (isEmpty(filteredData) || isEmpty(multiSortMeta)) {
@@ -667,6 +848,11 @@ export default function DataTableComponent({
     const sum = get(calculateSums, column);
     const hasSum = !isNil(sum) && !get(colType, 'isBoolean');
     
+    // Determine color based on field lists
+    const isRedField = includes(redFields, column);
+    const isGreenField = includes(greenFields, column);
+    const colorClass = isRedField ? 'text-red-600' : isGreenField ? 'text-green-600' : '';
+    
     if (isFirstColumn) {
       if (hasSum) {
         const formattedSum = sum % 1 === 0
@@ -674,7 +860,7 @@ export default function DataTableComponent({
           : sum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         return (
           <div className="text-left">
-            <strong>Total: {formattedSum}</strong>
+            <strong className={colorClass}>Total: {formattedSum}</strong>
           </div>
         );
       }
@@ -693,7 +879,7 @@ export default function DataTableComponent({
       : sum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return (
       <div className="text-right">
-        <strong>{formattedSum}</strong>
+        <strong className={colorClass}>{formattedSum}</strong>
       </div>
     );
   };
@@ -790,8 +976,29 @@ export default function DataTableComponent({
     );
   }, [filters, updateFilter]);
 
+  const multiselectFilterElement = useCallback((col) => (options) => {
+    const filterState = get(filters, col);
+    const value = get(filterState, 'value', null);
+    const columnOptions = get(optionColumnValues, col, []);
+    
+    return (
+      <MultiselectFilter
+        value={value}
+        options={columnOptions}
+        onChange={(newValue) => updateFilter(col, newValue)}
+        placeholder="Select..."
+      />
+    );
+  }, [filters, updateFilter, optionColumnValues]);
+
   const getFilterElement = useCallback((col) => {
     const colType = get(columnTypes, col);
+    const isOptionColumn = includes(optionColumns, col);
+    
+    // Option columns get multiselect filter (takes priority)
+    if (isOptionColumn) {
+      return multiselectFilterElement(col);
+    }
     if (get(colType, 'isBoolean')) {
       return booleanFilterElement(col);
     }
@@ -802,7 +1009,7 @@ export default function DataTableComponent({
       return numericFilterElement(col);
     }
     return textFilterElement(col);
-  }, [columnTypes, booleanFilterElement, dateFilterElement, numericFilterElement, textFilterElement]);
+  }, [columnTypes, optionColumns, booleanFilterElement, dateFilterElement, numericFilterElement, textFilterElement, multiselectFilterElement]);
 
   const getBodyTemplate = useCallback((col) => {
     const colType = get(columnTypes, col);
