@@ -1103,7 +1103,7 @@ export default function DataTableComponent({
     const filterState = get(filters, col);
     const value = get(filterState, 'value', null);
     return (
-      <div className="flex items-center justify-center">
+      <div className="flex items-center justify-center p-column-filter-checkbox-wrapper">
         <CustomTriStateCheckbox
           value={value}
           onChange={(newValue) => updateFilter(col, newValue)}
@@ -1294,7 +1294,7 @@ export default function DataTableComponent({
         </div>
       )}
 
-      <div className="border border-gray-200 rounded-lg overflow-hidden w-full overflow-x-auto responsive-table-container">
+      <div className="border border-gray-200 rounded-lg overflow-hidden w-full responsive-table-container">
         <DataTable
           value={paginatedData}
           scrollable={scrollable}

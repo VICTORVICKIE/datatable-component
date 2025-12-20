@@ -19,7 +19,7 @@ function useLocalStorageBoolean(key, defaultValue) {
     } catch (error) {
       try {
         window.localStorage.removeItem(key);
-      } catch {}
+      } catch { }
       return defaultValue;
     }
   });
@@ -72,7 +72,7 @@ function useLocalStorageArray(key, defaultValue) {
       // If parsing fails, try to clean up invalid data
       try {
         window.localStorage.removeItem(key);
-      } catch {}
+      } catch { }
       return defaultValue;
     }
   });
@@ -114,13 +114,13 @@ function useLocalStorageArray(key, defaultValue) {
 
 export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
-  const [enableSort, setEnableSort] = useLocalStorageBoolean('datatable-enableSort', true); 
-  const [enableFilter, setEnableFilter] = useLocalStorageBoolean('datatable-enableFilter', true);                                                                                        
-  const [enableSummation, setEnableSummation] = useLocalStorageBoolean('datatable-enableSummation', true);                                                                               
-  const [rowsPerPageOptionsRaw, setRowsPerPageOptionsRaw] = useLocalStorageArray('datatable-rowsPerPageOptions', [5, 10, 25, 50, 100, 200]);                                             
-  const [textFilterColumnsRaw, setTextFilterColumnsRaw] = useLocalStorageArray('datatable-textFilterColumns', []);                                                                                   
-  const [redFieldsRaw, setRedFieldsRaw] = useLocalStorageArray('datatable-redFields', []);  
-  const [greenFieldsRaw, setGreenFieldsRaw] = useLocalStorageArray('datatable-greenFields', []);                                                                                         
+  const [enableSort, setEnableSort] = useLocalStorageBoolean('datatable-enableSort', true);
+  const [enableFilter, setEnableFilter] = useLocalStorageBoolean('datatable-enableFilter', true);
+  const [enableSummation, setEnableSummation] = useLocalStorageBoolean('datatable-enableSummation', true);
+  const [rowsPerPageOptionsRaw, setRowsPerPageOptionsRaw] = useLocalStorageArray('datatable-rowsPerPageOptions', [5, 10, 25, 50, 100, 200]);
+  const [textFilterColumnsRaw, setTextFilterColumnsRaw] = useLocalStorageArray('datatable-textFilterColumns', []);
+  const [redFieldsRaw, setRedFieldsRaw] = useLocalStorageArray('datatable-redFields', []);
+  const [greenFieldsRaw, setGreenFieldsRaw] = useLocalStorageArray('datatable-greenFields', []);
 
   // Mark as loaded after first render to allow localStorage values to initialize
   useEffect(() => {
@@ -129,7 +129,7 @@ export default function Home() {
       // Clean up any corrupted data
       try {
         // Clean up boolean values that might be stored incorrectly
-        const booleanKeys = ['datatable-enableSort', 'datatable-enableFilter', 'datatable-enableSummation'];                                                                             
+        const booleanKeys = ['datatable-enableSort', 'datatable-enableFilter', 'datatable-enableSummation'];
         booleanKeys.forEach(key => {
           try {
             const item = window.localStorage.getItem(key);
@@ -147,12 +147,12 @@ export default function Home() {
         });
 
         const arrayKeys = {
-          'datatable-rowsPerPageOptions': { defaultValue: [5, 10, 25, 50, 100, 200], isColumnList: false },                                                                              
+          'datatable-rowsPerPageOptions': { defaultValue: [5, 10, 25, 50, 100, 200], isColumnList: false },
           'datatable-textFilterColumns': { defaultValue: [], isColumnList: true },
           'datatable-redFields': { defaultValue: [], isColumnList: true },
           'datatable-greenFields': { defaultValue: [], isColumnList: true }
         };
-        
+
         // Check each key and validate its content
         Object.entries(arrayKeys).forEach(([key, config]) => {
           try {
@@ -168,8 +168,8 @@ export default function Home() {
 
               // If rowsPerPageOptions contains non-numbers or column-like strings, reset it
               if (key === 'datatable-rowsPerPageOptions') {
-                const hasInvalidValues = parsed.some(v => 
-                  typeof v !== 'number' || 
+                const hasInvalidValues = parsed.some(v =>
+                  typeof v !== 'number' ||
                   (typeof v === 'string' && v.includes('__'))
                 );
                 if (hasInvalidValues) {
@@ -194,7 +194,7 @@ export default function Home() {
         // Ignore cleanup errors
         console.warn('Error during localStorage cleanup:', error);
       }
-      
+
       // Use requestAnimationFrame to ensure localStorage values are read after render      
       requestAnimationFrame(() => {
         setIsLoading(false);
@@ -263,7 +263,7 @@ export default function Home() {
   // Extract column names from data
   const columns = useMemo(() => {
     if (!Array.isArray(data) || isEmpty(data)) return [];
-    return uniq(flatMap(data, (item) => 
+    return uniq(flatMap(data, (item) =>
       item && typeof item === 'object' ? keys(item) : []
     ));
   }, []);
@@ -281,16 +281,16 @@ export default function Home() {
         {isLoading ? (
           <div className="flex items-center justify-center min-h-[400px]">
             <div className="text-center">
-              <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-gray-300 border-t-blue-600 mb-4"></div>                                                   
+              <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-gray-300 border-t-blue-600 mb-4"></div>
               <p className="text-sm text-gray-600">Loading your preferences...</p>
             </div>
           </div>
         ) : (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3 sm:p-4 md:p-6">                                                                                       
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3 sm:p-4 md:p-6">
             <div className="mb-4 sm:mb-6">
-              <h2 className="text-base sm:text-lg font-semibold text-gray-900 mb-1 sm:mb-2">Data Table</h2>                                                                              
+              <h2 className="text-base sm:text-lg font-semibold text-gray-900 mb-1 sm:mb-2">Data Table</h2>
               <p className="text-xs sm:text-sm text-gray-600">
-                View, filter, sort, and analyze your data with advanced table controls      
+                View, filter, sort, and analyze your data with advanced table controls
               </p>
             </div>
 
