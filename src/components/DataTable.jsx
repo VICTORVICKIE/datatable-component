@@ -6,6 +6,7 @@ import { Column } from 'primereact/column';
 import { InputText } from 'primereact/inputtext';
 import { Calendar } from 'primereact/calendar';
 import { Paginator } from 'primereact/paginator';
+import * as XLSX from 'xlsx';
 import {
   isNil,
   isNumber,
@@ -501,7 +502,7 @@ export default function DataTableComponent({
   enableSort = true,
   enableFilter = true,
   enableSummation = true,
-  optionColumns = [],
+  textFilterColumns = [], // Fields that should use text search box instead of multiselect
   redFields = [],
   greenFields = [],
 }) {
@@ -643,12 +644,31 @@ export default function DataTableComponent({
     return types;
   }, [safeData, columns, isNumericValue]);
 
-  // Compute unique values for option columns (for multiselect filters)
+  // Compute which columns should use multiselect (all string columns by default, minus textFilterColumns)
+  const multiselectColumns = useMemo(() => {
+    if (isEmpty(columns) || isEmpty(columnTypes)) return [];
+
+    // Get all string columns (non-numeric, non-boolean, non-date)
+    const stringColumns = columns.filter((col) => {
+      const colType = get(columnTypes, col);
+      return !get(colType, 'isBoolean') &&
+        !get(colType, 'isDate') &&
+        !get(colType, 'isNumeric');
+    });
+
+    // Remove textFilterColumns from string columns to get multiselect columns
+    const textFilterSet = new Set(textFilterColumns);
+    const multiselectCols = stringColumns.filter(col => !textFilterSet.has(col));
+
+    return multiselectCols;
+  }, [columns, columnTypes, textFilterColumns]);
+
+  // Compute unique values for multiselect columns
   const optionColumnValues = useMemo(() => {
     const values = {};
-    if (isEmpty(safeData) || isEmpty(optionColumns)) return values;
+    if (isEmpty(safeData) || isEmpty(multiselectColumns)) return values;
 
-    optionColumns.forEach((col) => {
+    multiselectColumns.forEach((col) => {
       const uniqueVals = compact(uniq(safeData.map((row) => get(row, col))));
       values[col] = orderBy(uniqueVals).map((val) => ({
         label: String(val),
@@ -657,30 +677,50 @@ export default function DataTableComponent({
     });
 
     return values;
-  }, [safeData, optionColumns]);
+  }, [safeData, multiselectColumns]);
 
   useEffect(() => {
     if (enableFilter && !isEmpty(columns)) {
-      const initialFilters = {};
+      const newFilters = { ...filters };
 
       columns.forEach((col) => {
-        const colType = get(columnTypes, col);
-        const isOptionColumn = includes(optionColumns, col);
-        
-        if (isOptionColumn) {
-          initialFilters[col] = { value: null, matchMode: 'in' };
-        } else if (get(colType, 'isBoolean')) {
-          initialFilters[col] = { value: null, matchMode: 'equals' };
-        } else if (get(colType, 'isDate')) {
-          initialFilters[col] = { value: null, matchMode: 'dateRange' };
+        if (!newFilters[col]) {
+          const colType = get(columnTypes, col);
+          const isMultiselectColumn = includes(multiselectColumns, col);
+
+          if (isMultiselectColumn) {
+            newFilters[col] = { value: null, matchMode: 'in' };
+          } else if (get(colType, 'isBoolean')) {
+            newFilters[col] = { value: null, matchMode: 'equals' };
+          } else if (get(colType, 'isDate')) {
+            newFilters[col] = { value: null, matchMode: 'dateRange' };
+          } else {
+            newFilters[col] = { value: null, matchMode: 'contains' };
+          }
         } else {
-          initialFilters[col] = { value: null, matchMode: 'contains' };
+          // Update matchMode if column type changed
+          const colType = get(columnTypes, col);
+          const isMultiselectColumn = includes(multiselectColumns, col);
+          const currentFilter = newFilters[col];
+
+          // Update matchMode if needed, but preserve the value
+          if (isMultiselectColumn && currentFilter.matchMode !== 'in') {
+            newFilters[col] = { ...currentFilter, matchMode: 'in' };
+          } else if (get(colType, 'isBoolean') && currentFilter.matchMode !== 'equals') {
+            newFilters[col] = { ...currentFilter, matchMode: 'equals' };
+          } else if (get(colType, 'isDate') && currentFilter.matchMode !== 'dateRange') {
+            newFilters[col] = { ...currentFilter, matchMode: 'dateRange' };
+          } else if (!isMultiselectColumn && !get(colType, 'isBoolean') && !get(colType, 'isDate') && currentFilter.matchMode !== 'contains') {
+            newFilters[col] = { ...currentFilter, matchMode: 'contains' };
+          }
         }
       });
 
-      setFilters(initialFilters);
+      setFilters(newFilters);
+    } else if (!enableFilter) {
+      setFilters({});
     }
-  }, [columns, enableFilter, columnTypes, optionColumns]);
+  }, [columns, enableFilter, columnTypes, multiselectColumns, textFilterColumns]);
 
   const calculateColumnWidths = useMemo(() => {
     const widths = {};
@@ -753,10 +793,10 @@ export default function DataTableComponent({
         const cellValue = get(row, col);
         const filterValue = filterObj.value;
         const colType = get(columnTypes, col);
-        const isOptionColumn = includes(optionColumns, col);
+        const isMultiselectColumn = includes(multiselectColumns, col);
 
-        // Multiselect filter (option columns)
-        if (isOptionColumn && isArray(filterValue)) {
+        // Multiselect filter (multiselect columns)
+        if (isMultiselectColumn && isArray(filterValue)) {
           return some(filterValue, (v) => v === cellValue || String(v) === String(cellValue));
         }
 
@@ -790,7 +830,7 @@ export default function DataTableComponent({
         return includes(strCell, strFilter);
       });
     });
-  }, [safeData, filters, columns, columnTypes, optionColumns]);
+  }, [safeData, filters, columns, columnTypes, multiselectColumns]);
 
   const sortedData = useMemo(() => {
     if (isEmpty(filteredData) || isEmpty(multiSortMeta)) {
@@ -993,10 +1033,10 @@ export default function DataTableComponent({
 
   const getFilterElement = useCallback((col) => {
     const colType = get(columnTypes, col);
-    const isOptionColumn = includes(optionColumns, col);
-    
-    // Option columns get multiselect filter (takes priority)
-    if (isOptionColumn) {
+    const isMultiselectColumn = includes(multiselectColumns, col);
+
+    // Multiselect columns get multiselect filter (takes priority)
+    if (isMultiselectColumn) {
       return multiselectFilterElement(col);
     }
     if (get(colType, 'isBoolean')) {
@@ -1009,7 +1049,7 @@ export default function DataTableComponent({
       return numericFilterElement(col);
     }
     return textFilterElement(col);
-  }, [columnTypes, optionColumns, booleanFilterElement, dateFilterElement, numericFilterElement, textFilterElement, multiselectFilterElement]);
+  }, [columnTypes, multiselectColumns, booleanFilterElement, dateFilterElement, numericFilterElement, textFilterElement, multiselectFilterElement]);
 
   const getBodyTemplate = useCallback((col) => {
     const colType = get(columnTypes, col);
@@ -1037,6 +1077,41 @@ export default function DataTableComponent({
     setFirst(event.first);
     setRows(event.rows);
   };
+
+  const exportToXLSX = useCallback(() => {
+    // Prepare data for export - use sortedData (filtered and sorted)
+    const exportData = sortedData.map((row) => {
+      const exportRow = {};
+      columns.forEach((col) => {
+        const value = get(row, col);
+        const colType = get(columnTypes, col);
+
+        // Format the value for export
+        if (isNil(value)) {
+          exportRow[formatHeaderName(col)] = '';
+        } else if (get(colType, 'isBoolean')) {
+          exportRow[formatHeaderName(col)] = isTruthyBoolean(value) ? 'Yes' : 'No';
+        } else if (get(colType, 'isDate')) {
+          exportRow[formatHeaderName(col)] = formatDateValue(value);
+        } else {
+          exportRow[formatHeaderName(col)] = formatCellValue(value, colType);
+        }
+      });
+      return exportRow;
+    });
+
+    // Create workbook and worksheet
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+
+    // Generate filename with current date
+    const dateStr = new Date().toISOString().split('T')[0];
+    const filename = `export_${dateStr}.xlsx`;
+
+    // Write file
+    XLSX.writeFile(wb, filename);
+  }, [sortedData, columns, columnTypes, formatHeaderName, formatCellValue, isTruthyBoolean]);
 
   if (isEmpty(safeData)) {
     return (
@@ -1072,6 +1147,19 @@ export default function DataTableComponent({
           )}
         </div>
       )}
+
+      {/* Export button */}
+      <div className="mb-4 flex items-center justify-end">
+        <button
+          onClick={exportToXLSX}
+          disabled={isEmpty(sortedData)}
+          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+          title="Export to Excel"
+        >
+          <i className="pi pi-file-excel"></i>
+          <span>Export XLSX</span>
+        </button>
+      </div>
 
       <div className="border border-gray-200 rounded-lg overflow-hidden w-full overflow-x-auto responsive-table-container">
         <DataTable

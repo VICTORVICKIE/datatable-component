@@ -192,14 +192,14 @@ export default function DataTableControls({
   enableSummation,
   rowsPerPageOptions,
   columns = [],
-  optionColumns = [],
+  textFilterColumns = [], // Fields that should use text search box instead of multiselect
   redFields = [],
   greenFields = [],
   onSortChange,
   onFilterChange,
   onSummationChange,
   onRowsPerPageOptionsChange,
-  onOptionColumnsChange,
+  onTextFilterColumnsChange,
   onRedFieldsChange,
   onGreenFieldsChange,
 }) {
@@ -343,20 +343,20 @@ export default function DataTableControls({
             </div>
           </div>
 
-          {/* Multiselect Filter Fields */}
+          {/* Text Search Fields */}
           {enableFilter && !isEmpty(columns) && (
             <div>
               <h4 className="text-xs font-medium text-gray-700 mb-2 flex items-center gap-2">
-                <i className="pi pi-tags text-gray-500"></i>
-                Multiselect Filter Fields
+                <i className="pi pi-search text-gray-500"></i>
+                Text Search Fields
               </h4>
               <p className="text-xs text-gray-500 mb-3">
-                Select fields that should use a searchable multiselect dropdown filter instead of text input.
+                Select fields that should use a text search box instead of multiselect dropdown. By default, all string fields use multiselect filters.
               </p>
               <FieldPicker
                 columns={columns}
-                selectedFields={optionColumns}
-                onSelectionChange={onOptionColumnsChange}
+                selectedFields={textFilterColumns}
+                onSelectionChange={onTextFilterColumnsChange}
                 formatFieldName={formatFieldName}
               />
             </div>
