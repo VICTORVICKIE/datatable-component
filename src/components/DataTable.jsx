@@ -305,7 +305,7 @@ function CustomTriStateCheckbox({ value, onChange }) {
   );
 }
 
-function MultiselectFilter({ value, options, onChange, placeholder = "Select..." }) {
+function MultiselectFilter({ value, options, onChange, placeholder = "Select...", fieldName }) {
   const [searchTerm, setSearchTerm] = React.useState('');
   const [isOpen, setIsOpen] = React.useState(false);
   const containerRef = React.useRef(null);
@@ -444,6 +444,11 @@ function MultiselectFilter({ value, options, onChange, placeholder = "Select..."
                 );
               })
             )}
+          </div>
+
+          {/* Footer */}
+          <div className="px-3 py-2 bg-gray-50 border-t border-gray-100 text-xs text-gray-500">
+            Total {fieldName || 'fields'}: {options.length}
           </div>
         </div>
       )}
@@ -963,6 +968,97 @@ export default function DataTableComponent({
     setFirst(0);
   }, []);
 
+  const clearFilter = useCallback((col) => {
+    updateFilter(col, null);
+  }, [updateFilter]);
+
+  const clearAllFilters = useCallback(() => {
+    const clearedFilters = {};
+    columns.forEach((col) => {
+      const colType = get(columnTypes, col);
+      const isMultiselectColumn = includes(multiselectColumns, col);
+      if (isMultiselectColumn) {
+        clearedFilters[col] = { value: null, matchMode: 'in' };
+      } else if (get(colType, 'isBoolean')) {
+        clearedFilters[col] = { value: null, matchMode: 'equals' };
+      } else if (get(colType, 'isDate')) {
+        clearedFilters[col] = { value: null, matchMode: 'dateRange' };
+      } else {
+        clearedFilters[col] = { value: null, matchMode: 'contains' };
+      }
+    });
+    setFilters(clearedFilters);
+    setFirst(0);
+  }, [columns, columnTypes, multiselectColumns]);
+
+  // Format filter value for display in chip
+  const formatFilterValue = useCallback((col, filterValue, colType) => {
+    if (isNil(filterValue) || filterValue === '') return null;
+
+    const isMultiselectColumn = includes(multiselectColumns, col);
+
+    // Multiselect filter - show comma-separated values
+    if (isMultiselectColumn && isArray(filterValue) && !isEmpty(filterValue)) {
+      return filterValue.map(v => String(v)).join(', ');
+    }
+
+    // Boolean filter
+    if (get(colType, 'isBoolean')) {
+      if (filterValue === true) return 'Yes';
+      if (filterValue === false) return 'No';
+      return null;
+    }
+
+    // Date range filter
+    if (get(colType, 'isDate') && isArray(filterValue)) {
+      const [startDate, endDate] = filterValue;
+      if (startDate && endDate) {
+        const startStr = formatDateValue(startDate);
+        const endStr = formatDateValue(endDate);
+        return `${startStr} - ${endStr}`;
+      } else if (startDate) {
+        return `From ${formatDateValue(startDate)}`;
+      } else if (endDate) {
+        return `Until ${formatDateValue(endDate)}`;
+      }
+      return null;
+    }
+
+    // Numeric and text filters - show as is
+    if (isString(filterValue) || isNumber(filterValue)) {
+      return String(filterValue);
+    }
+
+    return null;
+  }, [multiselectColumns]);
+
+  // Get active filters for display
+  const activeFilters = useMemo(() => {
+    if (!enableFilter || isEmpty(filters)) return [];
+    
+    const active = [];
+    columns.forEach((col) => {
+      const filterObj = get(filters, col);
+      if (filterObj && !isNil(filterObj.value) && filterObj.value !== '') {
+        // Handle empty arrays for multiselect
+        if (isArray(filterObj.value) && isEmpty(filterObj.value)) {
+          return;
+        }
+        const colType = get(columnTypes, col);
+        const formattedValue = formatFilterValue(col, filterObj.value, colType);
+        if (formattedValue !== null) {
+          active.push({
+            column: col,
+            value: filterObj.value,
+            formattedValue,
+            colType
+          });
+        }
+      }
+    });
+    return active;
+  }, [filters, columns, enableFilter, columnTypes, formatFilterValue, multiselectColumns]);
+
   const textFilterElement = useCallback((col) => (options) => {
     const filterState = get(filters, col);
     const value = isNil(get(filterState, 'value')) ? '' : filterState.value;
@@ -1027,9 +1123,10 @@ export default function DataTableComponent({
         options={columnOptions}
         onChange={(newValue) => updateFilter(col, newValue)}
         placeholder="Select..."
+        fieldName={formatHeaderName(col)}
       />
     );
-  }, [filters, updateFilter, optionColumnValues]);
+  }, [filters, updateFilter, optionColumnValues, formatHeaderName]);
 
   const getFilterElement = useCallback((col) => {
     const colType = get(columnTypes, col);
@@ -1160,6 +1257,42 @@ export default function DataTableComponent({
           <span>Export XLSX</span>
         </button>
       </div>
+
+      {/* Filter Chips */}
+      {enableFilter && !isEmpty(activeFilters) && (
+        <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-medium text-gray-600 mr-1">Active Filters:</span>
+            {activeFilters.map(({ column, formattedValue }) => (
+              <div
+                key={column}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-800 rounded-full text-xs font-medium"
+              >
+                <span>
+                  {formatHeaderName(column)}: {formattedValue}
+                </span>
+                <button
+                  onClick={() => clearFilter(column)}
+                  className="ml-1 hover:bg-blue-200 rounded-full p-0.5 transition-colors"
+                  title="Remove filter"
+                  type="button"
+                >
+                  <i className="pi pi-times text-[10px]"></i>
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={clearAllFilters}
+              className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-100 text-red-700 rounded-full text-xs font-medium hover:bg-red-200 transition-colors"
+              title="Clear all filters"
+              type="button"
+            >
+              <i className="pi pi-times-circle text-xs"></i>
+              <span>Clear All</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="border border-gray-200 rounded-lg overflow-hidden w-full overflow-x-auto responsive-table-container">
         <DataTable
