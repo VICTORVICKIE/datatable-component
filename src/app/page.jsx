@@ -112,6 +112,61 @@ function useLocalStorageArray(key, defaultValue) {
   return [value, setStoredValue];
 }
 
+// Custom hook for localStorage with proper JSON serialization for string/null values
+function useLocalStorageString(key, defaultValue) {
+  const [value, setValue] = useState(() => {
+    if (typeof window === 'undefined') return defaultValue;
+    try {
+      const item = window.localStorage.getItem(key);
+      if (item === null || item === undefined) return defaultValue;
+      const parsed = JSON.parse(item);
+      // Accept string or null values
+      return (typeof parsed === 'string' || parsed === null) ? parsed : defaultValue;
+    } catch (error) {
+      // If parsing fails, try to clean up invalid data
+      try {
+        window.localStorage.removeItem(key);
+      } catch { }
+      return defaultValue;
+    }
+  });
+
+  // Sync with localStorage on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const item = window.localStorage.getItem(key);
+      if (item !== null && item !== undefined) {
+        const parsed = JSON.parse(item);
+        if (typeof parsed === 'string' || parsed === null) {
+          setValue(parsed);
+        }
+      }
+    } catch (error) {
+      // Ignore errors during sync
+    }
+  }, [key]);
+
+  const setStoredValue = (newValue) => {
+    try {
+      // Accept string or null values
+      if (typeof newValue === 'string' || newValue === null) {
+        const serialized = JSON.stringify(newValue);
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(key, serialized);
+        }
+        setValue(newValue);
+      } else {
+        console.warn(`Attempted to set non-string/null value for "${key}":`, newValue);
+      }
+    } catch (error) {
+      console.error(`Error setting localStorage key "${key}":`, error);
+    }
+  };
+
+  return [value, setStoredValue];
+}
+
 export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [enableSort, setEnableSort] = useLocalStorageBoolean('datatable-enableSort', true);
@@ -119,8 +174,11 @@ export default function Home() {
   const [enableSummation, setEnableSummation] = useLocalStorageBoolean('datatable-enableSummation', true);
   const [rowsPerPageOptionsRaw, setRowsPerPageOptionsRaw] = useLocalStorageArray('datatable-rowsPerPageOptions', [5, 10, 25, 50, 100, 200]);
   const [textFilterColumnsRaw, setTextFilterColumnsRaw] = useLocalStorageArray('datatable-textFilterColumns', []);
+  const [visibleColumnsRaw, setVisibleColumnsRaw] = useLocalStorageArray('datatable-visibleColumns', []);
   const [redFieldsRaw, setRedFieldsRaw] = useLocalStorageArray('datatable-redFields', []);
   const [greenFieldsRaw, setGreenFieldsRaw] = useLocalStorageArray('datatable-greenFields', []);
+  const [outerGroupFieldRaw, setOuterGroupFieldRaw] = useLocalStorageString('datatable-outerGroupField', null);
+  const [innerGroupFieldRaw, setInnerGroupFieldRaw] = useLocalStorageString('datatable-innerGroupField', null);
 
   // Mark as loaded after first render to allow localStorage values to initialize
   useEffect(() => {
@@ -149,6 +207,7 @@ export default function Home() {
         const arrayKeys = {
           'datatable-rowsPerPageOptions': { defaultValue: [5, 10, 25, 50, 100, 200], isColumnList: false },
           'datatable-textFilterColumns': { defaultValue: [], isColumnList: true },
+          'datatable-visibleColumns': { defaultValue: [], isColumnList: true },
           'datatable-redFields': { defaultValue: [], isColumnList: true },
           'datatable-greenFields': { defaultValue: [], isColumnList: true }
         };
@@ -190,6 +249,24 @@ export default function Home() {
             window.localStorage.removeItem(key);
           }
         });
+
+        // Validate string/null keys (group fields)
+        const stringKeys = ['datatable-outerGroupField', 'datatable-innerGroupField'];
+        stringKeys.forEach(key => {
+          try {
+            const item = window.localStorage.getItem(key);
+            if (item) {
+              const parsed = JSON.parse(item);
+              // If it's not a string or null, remove it
+              if (typeof parsed !== 'string' && parsed !== null) {
+                window.localStorage.removeItem(key);
+              }
+            }
+          } catch (error) {
+            // If parsing fails, remove the corrupted item
+            window.localStorage.removeItem(key);
+          }
+        });
       } catch (error) {
         // Ignore cleanup errors
         console.warn('Error during localStorage cleanup:', error);
@@ -220,6 +297,14 @@ export default function Home() {
     return textFilterColumnsRaw;
   }, [textFilterColumnsRaw]);
 
+  // Ensure visibleColumns is always an array
+  const visibleColumns = useMemo(() => {
+    if (!Array.isArray(visibleColumnsRaw)) {
+      return [];
+    }
+    return visibleColumnsRaw;
+  }, [visibleColumnsRaw]);
+
   // Ensure redFields is always an array
   const redFields = useMemo(() => {
     if (!Array.isArray(redFieldsRaw)) {
@@ -248,6 +333,12 @@ export default function Home() {
     }
   };
 
+  const setVisibleColumns = (value) => {
+    if (Array.isArray(value)) {
+      setVisibleColumnsRaw(value);
+    }
+  };
+
   const setRedFields = (value) => {
     if (Array.isArray(value)) {
       setRedFieldsRaw(value);
@@ -259,6 +350,14 @@ export default function Home() {
       setGreenFieldsRaw(value);
     }
   };
+
+  // Handle outer group field (single value, not array) - already using localStorage hook
+  const outerGroupField = outerGroupFieldRaw;
+  const setOuterGroupField = setOuterGroupFieldRaw;
+
+  // Handle inner group field (single value, not array) - already using localStorage hook
+  const innerGroupField = innerGroupFieldRaw;
+  const setInnerGroupField = setInnerGroupFieldRaw;
 
   // Extract column names from data
   const columns = useMemo(() => {
@@ -301,15 +400,21 @@ export default function Home() {
               rowsPerPageOptions={rowsPerPageOptions}
               columns={columns}
               textFilterColumns={textFilterColumns}
+              visibleColumns={visibleColumns}
               redFields={redFields}
               greenFields={greenFields}
+              outerGroupField={outerGroupField}
+              innerGroupField={innerGroupField}
               onSortChange={setEnableSort}
               onFilterChange={setEnableFilter}
               onSummationChange={setEnableSummation}
               onRowsPerPageOptionsChange={setRowsPerPageOptions}
               onTextFilterColumnsChange={setTextFilterColumns}
+              onVisibleColumnsChange={setVisibleColumns}
               onRedFieldsChange={setRedFields}
               onGreenFieldsChange={setGreenFields}
+              onOuterGroupFieldChange={setOuterGroupField}
+              onInnerGroupFieldChange={setInnerGroupField}
             />
 
             <DataTableComponent
@@ -321,8 +426,11 @@ export default function Home() {
               enableFilter={enableFilter}
               enableSummation={enableSummation}
               textFilterColumns={textFilterColumns}
+              visibleColumns={visibleColumns}
               redFields={redFields}
               greenFields={greenFields}
+              outerGroupField={outerGroupField}
+              innerGroupField={innerGroupField}
             />
           </div>
         )}

@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { InputText } from 'primereact/inputtext';
@@ -37,6 +38,8 @@ import {
   compact,
   some,
   isArray,
+  groupBy,
+  values,
 } from 'lodash';
 
 // Date format patterns for detection
@@ -306,23 +309,99 @@ function CustomTriStateCheckbox({ value, onChange }) {
 }
 
 function MultiselectFilter({ value, options, onChange, placeholder = "Select...", fieldName }) {
-  const [searchTerm, setSearchTerm] = React.useState('');
-  const [isOpen, setIsOpen] = React.useState(false);
-  const containerRef = React.useRef(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0, width: 0 });
+  const triggerRef = useRef(null);
+  const dropdownRef = useRef(null);
   const selectedValues = value || [];
+  const [mounted, setMounted] = useState(false);
+
+  // Ensure portal target exists
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Calculate position before rendering to avoid flash
+  useLayoutEffect(() => {
+    if (!isOpen || !triggerRef.current) return;
+
+    const calculatePosition = () => {
+      if (!triggerRef.current) return;
+
+      const rect = triggerRef.current.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const dropdownWidth = 224; // w-56 = 14rem = 224px
+      const dropdownHeight = 300; // Approximate max height
+      const gap = 4; // mt-1 = 4px
+
+      let left = rect.left;
+      let top = rect.bottom + gap;
+
+      // Adjust horizontal position if dropdown would overflow right
+      if (left + dropdownWidth > viewportWidth) {
+        left = Math.max(8, viewportWidth - dropdownWidth - 8);
+      }
+
+      // Adjust horizontal position if dropdown would overflow left
+      if (left < 8) {
+        left = 8;
+      }
+
+      // Adjust vertical position if dropdown would overflow bottom
+      if (top + dropdownHeight > viewportHeight) {
+        // Try to show above the trigger
+        const spaceAbove = rect.top;
+        if (spaceAbove > dropdownHeight) {
+          top = rect.top - dropdownHeight - gap;
+        } else {
+          // Not enough space above, position at bottom of viewport
+          top = viewportHeight - dropdownHeight - 8;
+        }
+      }
+
+      setPosition({
+        top,
+        left,
+        width: Math.max(rect.width, dropdownWidth)
+      });
+    };
+
+    calculatePosition();
+
+    // Update position on scroll and resize
+    const updatePosition = debounce(calculatePosition, 10);
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [isOpen]);
 
   // Close dropdown when clicking outside
-  React.useEffect(() => {
+  useEffect(() => {
+    if (!isOpen) return;
+
     const handleClickOutside = (event) => {
-      if (containerRef.current && !containerRef.current.contains(event.target)) {
+      if (
+        triggerRef.current &&
+        !triggerRef.current.contains(event.target) &&
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target)
+      ) {
         setIsOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
 
-  const filteredOptions = React.useMemo(() => {
+    // Use capture phase to catch clicks before they bubble
+    document.addEventListener('mousedown', handleClickOutside, true);
+    return () => document.removeEventListener('mousedown', handleClickOutside, true);
+  }, [isOpen]);
+
+  const filteredOptions = useMemo(() => {
     if (!searchTerm) return options;
     const term = toLower(searchTerm);
     return filter(options, opt => includes(toLower(String(opt.label)), term));
@@ -345,114 +424,129 @@ function MultiselectFilter({ value, options, onChange, placeholder = "Select..."
     onChange(options.map(o => o.value));
   };
 
-  return (
-    <div ref={containerRef} className="relative multiselect-filter-container">
-      {/* Trigger Button */}
-      <button
-        type="button"
-        onClick={() => setIsOpen(!isOpen)}
-        className={`w-full flex items-center justify-between px-2 py-1.5 text-xs border rounded bg-white hover:border-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
-          isEmpty(selectedValues) ? 'border-gray-300 text-gray-500' : 'border-blue-400 text-blue-700 bg-blue-50'
-        }`}
-      >
-        <span className="truncate">
-          {isEmpty(selectedValues) ? placeholder : `${selectedValues.length} Filter${selectedValues.length !== 1 ? 's' : ''}`}
-        </span>
-        <i className={`pi ${isOpen ? 'pi-chevron-up' : 'pi-chevron-down'} text-[10px] ml-1 flex-shrink-0`}></i>
-      </button>
-
-      {/* Dropdown */}
-      {isOpen && (
-        <div className="absolute z-[9999] w-56 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" style={{ minWidth: '200px' }}>
-          {/* Search Input */}
-          <div className="p-2 border-b border-gray-100">
-            <div className="relative">
-              <i className="pi pi-search absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]"></i>
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search..."
-                className="w-full pl-7 pr-7 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                autoFocus
-                onClick={(e) => e.stopPropagation()}
-              />
-              {searchTerm && (
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); setSearchTerm(''); }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                >
-                  <i className="pi pi-times text-[10px]"></i>
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Quick Actions */}
-          <div className="px-2 py-1 border-b border-gray-100 flex gap-2 text-[10px]">
+  const dropdownContent = isOpen && mounted ? (
+    <div
+      ref={dropdownRef}
+      className="fixed z-[9999] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden"
+      style={{
+        top: `${position.top}px`,
+        left: `${position.left}px`,
+        width: `${position.width}px`,
+        minWidth: '200px',
+        maxWidth: '400px'
+      }}
+    >
+      {/* Search Input */}
+      <div className="p-2 border-b border-gray-100">
+        <div className="relative">
+          <i className="pi pi-search absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]"></i>
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search..."
+            className="w-full pl-7 pr-7 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+            autoFocus
+            onClick={(e) => e.stopPropagation()}
+          />
+          {searchTerm && (
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); selectAll(); }}
-              className="text-blue-600 hover:text-blue-800 transition-colors"
+              onClick={(e) => { e.stopPropagation(); setSearchTerm(''); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
             >
-              All
+              <i className="pi pi-times text-[10px]"></i>
             </button>
-            <span className="text-gray-300">|</span>
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); clearAll(); }}
-              className="text-gray-500 hover:text-red-600 transition-colors"
-            >
-              Clear
-            </button>
-            {!isEmpty(selectedValues) && (
-              <>
-                <span className="text-gray-300">|</span>
-                <span className="text-gray-500">{selectedValues.length} selected</span>
-              </>
-            )}
-          </div>
-
-          {/* Options List */}
-          <div className="max-h-40 overflow-y-auto">
-            {isEmpty(filteredOptions) ? (
-              <div className="px-3 py-3 text-center text-xs text-gray-500">
-                No matches
-              </div>
-            ) : (
-              filteredOptions.map(opt => {
-                const isSelected = includes(selectedValues, opt.value);
-                return (
-                  <label
-                    key={opt.value}
-                    className={`flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors text-xs ${
-                      isSelected ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'
-                    }`}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => toggleValue(opt.value)}
-                      className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                    />
-                    <span className={`truncate ${isSelected ? 'text-blue-900 font-medium' : 'text-gray-700'}`}>
-                      {opt.label}
-                    </span>
-                  </label>
-                );
-              })
-            )}
-          </div>
-
-          {/* Footer */}
-          <div className="px-3 py-2 bg-gray-50 border-t border-gray-100 text-xs text-gray-500">
-            Total {fieldName || 'fields'}: {options.length}
-          </div>
+          )}
         </div>
-      )}
+      </div>
+
+      {/* Quick Actions */}
+      <div className="px-2 py-1 border-b border-gray-100 flex gap-2 text-[10px]">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); selectAll(); }}
+          className="text-blue-600 hover:text-blue-800 transition-colors"
+        >
+          All
+        </button>
+        <span className="text-gray-300">|</span>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); clearAll(); }}
+          className="text-gray-500 hover:text-red-600 transition-colors"
+        >
+          Clear
+        </button>
+        {!isEmpty(selectedValues) && (
+          <>
+            <span className="text-gray-300">|</span>
+            <span className="text-gray-500">{selectedValues.length} selected</span>
+          </>
+        )}
+      </div>
+
+      {/* Options List */}
+      <div className="max-h-40 overflow-y-auto">
+        {isEmpty(filteredOptions) ? (
+          <div className="px-3 py-3 text-center text-xs text-gray-500">
+            No matches
+          </div>
+        ) : (
+          filteredOptions.map(opt => {
+            const isSelected = includes(selectedValues, opt.value);
+            return (
+              <label
+                key={opt.value}
+                className={`flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors text-xs ${
+                  isSelected ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'
+                }`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleValue(opt.value)}
+                  className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <span className={`truncate ${isSelected ? 'text-blue-900 font-medium' : 'text-gray-700'}`}>
+                  {opt.label}
+                </span>
+              </label>
+            );
+          })
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="px-3 py-2 bg-gray-50 border-t border-gray-100 text-xs text-gray-500">
+        Total {fieldName || 'fields'}: {options.length}
+      </div>
     </div>
+  ) : null;
+
+  return (
+    <>
+      <div className="multiselect-filter-container">
+        {/* Trigger Button */}
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className={`w-full flex items-center justify-between px-2 py-1.5 text-xs border rounded bg-white hover:border-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
+            isEmpty(selectedValues) ? 'border-gray-300 text-gray-500' : 'border-blue-400 text-blue-700 bg-blue-50'
+          }`}
+        >
+          <span className="truncate">
+            {isEmpty(selectedValues) ? placeholder : `${selectedValues.length} Filter${selectedValues.length !== 1 ? 's' : ''}`}
+          </span>
+          <i className={`pi ${isOpen ? 'pi-chevron-up' : 'pi-chevron-down'} text-[10px] ml-1 flex-shrink-0`}></i>
+        </button>
+      </div>
+
+      {/* Portal dropdown */}
+      {mounted && createPortal(dropdownContent, document.body)}
+    </>
   );
 }
 
@@ -508,19 +602,29 @@ export default function DataTableComponent({
   enableFilter = true,
   enableSummation = true,
   textFilterColumns = [], // Fields that should use text search box instead of multiselect
+  visibleColumns = [], // Fields that should be visible (empty array means show all)
   redFields = [],
   greenFields = [],
+  outerGroupField = null,
+  innerGroupField = null,
 }) {
   const [first, setFirst] = useState(0);
   const [rows, setRows] = useState(defaultRows);
   const [filters, setFilters] = useState({});
   const [scrollHeightValue, setScrollHeightValue] = useState('600px');
   const [multiSortMeta, setMultiSortMeta] = useState([]);
+  const [expandedRows, setExpandedRows] = useState([]);
 
   useEffect(() => {
     setRows(defaultRows);
     setFirst(0);
   }, [defaultRows]);
+
+  // Reset expanded rows when group fields change
+  useEffect(() => {
+    setExpandedRows([]);
+    setFirst(0);
+  }, [outerGroupField, innerGroupField]);
 
   useEffect(() => {
     const updateScrollHeight = debounce(() => {
@@ -559,39 +663,9 @@ export default function DataTableComponent({
     return allKeys;
   }, [safeData]);
 
-  const frozenCols = useMemo(
-    () => isEmpty(columns) ? [] : [head(columns)],
-    [columns]
-  );
-  
-  const regularCols = useMemo(
-    () => tail(columns),
-    [columns]
-  );
-
   const isNumericValue = useCallback((value) => {
     if (isNil(value)) return false;
     return isNumber(value) || (!_isNaN(parseFloat(value)) && _isFinite(value));
-  }, []);
-
-  const formatHeaderName = useCallback((key) => {
-    return startCase(key.split('__').join(' ').split('_').join(' '));
-  }, []);
-
-  const formatCellValue = useCallback((value, colType) => {
-    if (isNil(value)) return '';
-    
-    // Format dates
-    if (colType?.isDate) {
-      return formatDateValue(value);
-    }
-    
-    if (isNumber(value)) {
-      return value % 1 === 0
-        ? value.toLocaleString('en-US')
-        : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    }
-    return String(value);
   }, []);
 
   const columnTypes = useMemo(() => {
@@ -648,6 +722,78 @@ export default function DataTableComponent({
 
     return types;
   }, [safeData, columns, isNumericValue]);
+
+  // Reorder columns when inner group is selected: outer group pivot as 1st, inner group pivot as 2nd
+  // When innerGroupField is selected, hide all string, date, and boolean columns (keep only numeric + group fields)
+  // visibleColumns is respected even when innerGroupField is selected - only numeric columns in visibleColumns are shown
+  const orderedColumns = useMemo(() => {
+    if (isEmpty(columns)) return [];
+    
+    // When innerGroupField is selected, filter by type AND respect visibleColumns
+    if (innerGroupField && outerGroupField) {
+      // When 2nd group field is selected, filter out string, date, and boolean columns
+      // Keep only: outerGroupField, innerGroupField, and numeric columns (that are also in visibleColumns if provided)
+      const visibleSet = !isEmpty(visibleColumns) && isArray(visibleColumns) ? new Set(visibleColumns) : null;
+      
+      const restColumns = columns.filter(col => {
+        if (col === outerGroupField || col === innerGroupField) {
+          return false; // Already included
+        }
+        
+        // If visibleColumns is provided, only include columns that are in visibleColumns
+        if (visibleSet && !visibleSet.has(col)) {
+          return false;
+        }
+        
+        // Only filter if columnTypes is populated
+        if (isEmpty(columnTypes)) {
+          return false; // Wait for columnTypes to be computed
+        }
+        const colType = get(columnTypes, col, {});
+        // Keep only numeric columns (exclude string, date, boolean)
+        return get(colType, 'isNumeric', false);
+      });
+      return [outerGroupField, innerGroupField, ...restColumns];
+    }
+    
+    // Apply visibleColumns filter if provided (and not empty)
+    if (!isEmpty(visibleColumns) && isArray(visibleColumns)) {
+      const visibleSet = new Set(visibleColumns);
+      return columns.filter(col => visibleSet.has(col));
+    }
+    
+    return columns;
+  }, [columns, outerGroupField, innerGroupField, columnTypes, visibleColumns]);
+
+  const frozenCols = useMemo(
+    () => isEmpty(orderedColumns) ? [] : [head(orderedColumns)],
+    [orderedColumns]
+  );
+  
+  const regularCols = useMemo(
+    () => tail(orderedColumns),
+    [orderedColumns]
+  );
+
+  const formatHeaderName = useCallback((key) => {
+    return startCase(key.split('__').join(' ').split('_').join(' '));
+  }, []);
+
+  const formatCellValue = useCallback((value, colType) => {
+    if (isNil(value)) return '';
+    
+    // Format dates
+    if (colType?.isDate) {
+      return formatDateValue(value);
+    }
+    
+    if (isNumber(value)) {
+      return value % 1 === 0
+        ? value.toLocaleString('en-US')
+        : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    return String(value);
+  }, []);
 
   // Compute which columns should use multiselect (all string columns by default, minus textFilterColumns)
   const multiselectColumns = useMemo(() => {
@@ -848,9 +994,118 @@ export default function DataTableComponent({
     return orderBy(filteredData, fields, orders);
   }, [filteredData, multiSortMeta]);
 
+  // Grouping logic: transform data based on outerGroupField and innerGroupField
+  const groupedData = useMemo(() => {
+    if (isEmpty(sortedData) || !isArray(sortedData)) return [];
+    
+    // No grouping fields selected: return as is
+    if (!outerGroupField && !innerGroupField) {
+      return sortedData;
+    }
+
+    // Only outer group selected: group by outer group but don't aggregate
+    if (outerGroupField && !innerGroupField) {
+      // Return data grouped by outer group (PrimeReact will handle expandable headers)
+      // We need to sort by outer group field first
+      // Ensure all rows have the outer group field
+      const validData = sortedData.filter(row => row && typeof row === 'object' && !isNil(get(row, outerGroupField)));
+      return orderBy(validData, [outerGroupField], ['asc']);
+    }
+
+    // Both outer and inner group selected: aggregate data
+    if (outerGroupField && innerGroupField) {
+      // Filter out rows that don't have both group fields
+      const validData = sortedData.filter(row => 
+        row && 
+        typeof row === 'object' && 
+        !isNil(get(row, outerGroupField)) && 
+        !isNil(get(row, innerGroupField))
+      );
+      
+      if (isEmpty(validData)) return [];
+      
+      // Group by outer group first
+      const outerGroups = groupBy(validData, (row) => String(get(row, outerGroupField, '')));
+      
+      const aggregatedRows = [];
+      
+      // Process each outer group
+      Object.keys(outerGroups).forEach((outerKey) => {
+        const outerGroupRows = outerGroups[outerKey];
+        
+        if (isEmpty(outerGroupRows)) return;
+        
+        // Group by inner group within this outer group
+        const innerGroups = groupBy(outerGroupRows, (row) => String(get(row, innerGroupField, '')));
+        
+        // Aggregate each inner group
+        Object.keys(innerGroups).forEach((innerKey) => {
+          const innerGroupRows = innerGroups[innerKey];
+          
+          if (isEmpty(innerGroupRows)) return;
+          
+          // Create aggregated row
+          const aggregatedRow = {
+            // Mark as aggregated row
+            __isGrouped: true,
+            __outerGroupKey: outerKey,
+            __innerGroupKey: innerKey,
+          };
+          
+          // Set pivot fields as first two columns
+          aggregatedRow[outerGroupField] = outerKey;
+          aggregatedRow[innerGroupField] = innerKey;
+          
+          // Aggregate numeric columns
+          columns.forEach((col) => {
+            if (col === outerGroupField || col === innerGroupField) {
+              // Already set above
+              return;
+            }
+            
+            const colType = get(columnTypes, col);
+            const isNumericCol = get(colType, 'isNumeric', false);
+            const isDateCol = get(colType, 'isDate', false);
+            const isBooleanCol = get(colType, 'isBoolean', false);
+            
+            if (isNumericCol) {
+              // Sum numeric values
+              const sum = sumBy(innerGroupRows, (row) => {
+                const val = get(row, col);
+                if (isNil(val)) return 0;
+                const numVal = isNumber(val) ? val : toNumber(val);
+                return _isNaN(numVal) ? 0 : numVal;
+              });
+              aggregatedRow[col] = sum;
+            } else if (isBooleanCol) {
+              // Take first boolean value (or most common)
+              aggregatedRow[col] = get(innerGroupRows[0], col);
+            } else if (isDateCol) {
+              // Take first date value
+              aggregatedRow[col] = get(innerGroupRows[0], col);
+            } else {
+              // For non-numeric: take first value or concatenate unique values
+              const uniqueValues = compact(uniq(innerGroupRows.map(row => get(row, col))));
+              aggregatedRow[col] = uniqueValues.length === 1 ? uniqueValues[0] : uniqueValues.join(', ');
+            }
+          });
+          
+          aggregatedRows.push(aggregatedRow);
+        });
+      });
+      
+      // Sort by outer group, then inner group
+      return orderBy(aggregatedRows, [outerGroupField, innerGroupField], ['asc', 'asc']);
+    }
+
+    return isArray(sortedData) ? sortedData : [];
+  }, [sortedData, outerGroupField, innerGroupField, columns, columnTypes]);
+
   const calculateSums = useMemo(() => {
     const sums = {};
-    if (isEmpty(filteredData)) return sums;
+    // Use groupedData if inner group is selected (aggregated), otherwise use filteredData
+    const dataForSums = (innerGroupField && outerGroupField) ? groupedData : filteredData;
+    if (isEmpty(dataForSums)) return sums;
 
     columns.forEach((col) => {
       const colType = get(columnTypes, col);
@@ -858,7 +1113,7 @@ export default function DataTableComponent({
       if (get(colType, 'isDate')) return;
       
       const values = filter(
-        filteredData.map((row) => get(row, col)),
+        dataForSums.map((row) => get(row, col)),
         (val) => !isNil(val)
       );
       
@@ -870,11 +1125,23 @@ export default function DataTableComponent({
       }
     });
     return sums;
-  }, [filteredData, columns, isNumericValue, columnTypes]);
+  }, [filteredData, groupedData, innerGroupField, outerGroupField, columns, isNumericValue, columnTypes]);
 
   const paginatedData = useMemo(() => {
-    return sortedData.slice(first, first + rows);
-  }, [sortedData, first, rows]);
+    if (!isArray(groupedData)) return [];
+    
+    // When outer group is enabled, ensure all rows have the grouping field
+    let validData = groupedData;
+    if (outerGroupField) {
+      validData = groupedData.filter(row => 
+        row && 
+        typeof row === 'object' && 
+        !isNil(get(row, outerGroupField))
+      );
+    }
+    
+    return validData.slice(first, first + rows);
+  }, [groupedData, first, rows, outerGroupField]);
 
   const footerTemplate = (column, isFirstColumn = false) => {
     if (!enableSummation) return null;
@@ -1176,8 +1443,8 @@ export default function DataTableComponent({
   };
 
   const exportToXLSX = useCallback(() => {
-    // Prepare data for export - use sortedData (filtered and sorted)
-    const exportData = sortedData.map((row) => {
+    // Prepare data for export - use groupedData (filtered, sorted, and grouped)
+    const exportData = groupedData.map((row) => {
       const exportRow = {};
       columns.forEach((col) => {
         const value = get(row, col);
@@ -1208,7 +1475,7 @@ export default function DataTableComponent({
 
     // Write file
     XLSX.writeFile(wb, filename);
-  }, [sortedData, columns, columnTypes, formatHeaderName, formatCellValue, isTruthyBoolean]);
+  }, [groupedData, columns, columnTypes, formatHeaderName, formatCellValue, isTruthyBoolean]);
 
   if (isEmpty(safeData)) {
     return (
@@ -1249,7 +1516,7 @@ export default function DataTableComponent({
       <div className="mb-4 flex items-center justify-end">
         <button
           onClick={exportToXLSX}
-          disabled={isEmpty(sortedData)}
+          disabled={isEmpty(groupedData)}
           className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
           title="Export to Excel"
         >
@@ -1294,9 +1561,9 @@ export default function DataTableComponent({
         </div>
       )}
 
-      <div className="border border-gray-200 rounded-lg overflow-hidden w-full responsive-table-container">
+      <div className="border border-gray-200 rounded-lg w-full responsive-table-container" style={{ position: 'relative' }}>
         <DataTable
-          value={paginatedData}
+          value={isArray(paginatedData) ? paginatedData : []}
           scrollable={scrollable}
           scrollHeight={scrollHeightValue}
           sortMode={enableSort ? "multiple" : undefined}
@@ -1311,6 +1578,47 @@ export default function DataTableComponent({
           className="p-datatable-sm w-full"
           style={{ minWidth: '100%' }}
           filterDisplay={enableFilter ? "row" : undefined}
+          {...(outerGroupField && isArray(paginatedData) && paginatedData.length > 0 ? {
+            rowGroupMode: "subheader",
+            groupRowsBy: outerGroupField,
+            expandableRowGroups: true,
+            expandedRows: isArray(expandedRows) ? expandedRows : [],
+            onRowToggle: (e) => {
+              if (e && e.data !== undefined) {
+                setExpandedRows(isArray(e.data) ? e.data : []);
+              }
+            },
+            rowGroupHeaderTemplate: (data) => {
+              if (!data || typeof data !== 'object') return null;
+              const groupValue = get(data, outerGroupField, '');
+              return (
+                <React.Fragment>
+                  <span className="font-bold text-gray-900">{formatHeaderName(outerGroupField)}: {formatCellValue(groupValue, get(columnTypes, outerGroupField))}</span>
+                  {innerGroupField && (
+                    <span className="ml-2 text-xs text-gray-500">
+                      ({isArray(groupedData) ? groupedData.filter(row => row && get(row, outerGroupField) === groupValue).length : 0} items)
+                    </span>
+                  )}
+                </React.Fragment>
+              );
+            },
+            ...(outerGroupField && !innerGroupField ? {
+              rowGroupFooterTemplate: (data) => {
+                if (!data || typeof data !== 'object') return null;
+                const groupValue = get(data, outerGroupField, '');
+                const groupRows = isArray(groupedData) ? groupedData.filter(row => row && get(row, outerGroupField) === groupValue) : [];
+                return (
+                  <React.Fragment>
+                    <td colSpan={orderedColumns.length}>
+                      <div className="flex justify-end font-bold w-full text-sm text-gray-700">
+                        Total: {groupRows.length} row{groupRows.length !== 1 ? 's' : ''}
+                      </div>
+                    </td>
+                  </React.Fragment>
+                );
+              }
+            } : {})
+          } : {})}
         >
           {frozenCols.map((col, index) => {
             const colType = get(columnTypes, col);
@@ -1370,7 +1678,7 @@ export default function DataTableComponent({
         <Paginator
           first={first}
           rows={rows}
-          totalRecords={sortedData.length}
+          totalRecords={groupedData.length}
           rowsPerPageOptions={rowsPerPageOptions}
           onPageChange={onPageChange}
           template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink RowsPerPageDropdown"
