@@ -38,7 +38,6 @@ import {
   compact,
   some,
   isArray,
-  groupBy,
   values,
 } from 'lodash';
 
@@ -605,26 +604,20 @@ export default function DataTableComponent({
   visibleColumns = [], // Fields that should be visible (empty array means show all)
   redFields = [],
   greenFields = [],
-  outerGroupField = null,
-  innerGroupField = null,
+  outerGroupField = null, // Field to group by for row expansion
+  innerGroupField = null, // Field to aggregate by within each outer group
 }) {
   const [first, setFirst] = useState(0);
   const [rows, setRows] = useState(defaultRows);
   const [filters, setFilters] = useState({});
   const [scrollHeightValue, setScrollHeightValue] = useState('600px');
   const [multiSortMeta, setMultiSortMeta] = useState([]);
-  const [expandedRows, setExpandedRows] = useState([]);
+  const [expandedRows, setExpandedRows] = useState(null);
 
   useEffect(() => {
     setRows(defaultRows);
     setFirst(0);
   }, [defaultRows]);
-
-  // Reset expanded rows when group fields change
-  useEffect(() => {
-    setExpandedRows([]);
-    setFirst(0);
-  }, [outerGroupField, innerGroupField]);
 
   useEffect(() => {
     const updateScrollHeight = debounce(() => {
@@ -723,47 +716,60 @@ export default function DataTableComponent({
     return types;
   }, [safeData, columns, isNumericValue]);
 
-  // Reorder columns when inner group is selected: outer group pivot as 1st, inner group pivot as 2nd
-  // When innerGroupField is selected, hide all string, date, and boolean columns (keep only numeric + group fields)
-  // visibleColumns is respected even when innerGroupField is selected - only numeric columns in visibleColumns are shown
+
   const orderedColumns = useMemo(() => {
     if (isEmpty(columns)) return [];
     
-    // When innerGroupField is selected, filter by type AND respect visibleColumns
-    if (innerGroupField && outerGroupField) {
-      // When 2nd group field is selected, filter out string, date, and boolean columns
-      // Keep only: outerGroupField, innerGroupField, and numeric columns (that are also in visibleColumns if provided)
-      const visibleSet = !isEmpty(visibleColumns) && isArray(visibleColumns) ? new Set(visibleColumns) : null;
-      
-      const restColumns = columns.filter(col => {
-        if (col === outerGroupField || col === innerGroupField) {
-          return false; // Already included
+    let filteredColumns = columns;
+    
+    // When grouping is active, show only numeric columns, but always include outer group field
+    // Inner group field is hidden in main table (only shown in nested table)
+    if (outerGroupField) {
+      filteredColumns = columns.filter(col => {
+        // Always include outer group field (but NOT inner group field in main table)
+        if (col === outerGroupField) {
+          return true;
         }
-        
-        // If visibleColumns is provided, only include columns that are in visibleColumns
-        if (visibleSet && !visibleSet.has(col)) {
+        // Exclude inner group field from main table
+        if (col === innerGroupField) {
           return false;
         }
-        
-        // Only filter if columnTypes is populated
-        if (isEmpty(columnTypes)) {
-          return false; // Wait for columnTypes to be computed
-        }
+        // Otherwise, only show numeric columns
         const colType = get(columnTypes, col, {});
-        // Keep only numeric columns (exclude string, date, boolean)
         return get(colType, 'isNumeric', false);
       });
-      return [outerGroupField, innerGroupField, ...restColumns];
     }
     
     // Apply visibleColumns filter if provided (and not empty)
     if (!isEmpty(visibleColumns) && isArray(visibleColumns)) {
       const visibleSet = new Set(visibleColumns);
-      return columns.filter(col => visibleSet.has(col));
+      // Always include outer group field even if not in visibleColumns
+      // Exclude inner group field from main table
+      filteredColumns = filteredColumns.filter(col => {
+        if (col === outerGroupField) {
+          return true;
+        }
+        if (col === innerGroupField) {
+          return false;
+        }
+        return visibleSet.has(col);
+      });
     }
     
-    return columns;
-  }, [columns, outerGroupField, innerGroupField, columnTypes, visibleColumns]);
+    // Reorder: outerGroupField first, then rest (innerGroupField is excluded)
+    if (outerGroupField) {
+      const otherColumns = filteredColumns.filter(
+        col => col !== outerGroupField
+      );
+      const ordered = [];
+      if (outerGroupField && includes(filteredColumns, outerGroupField)) {
+        ordered.push(outerGroupField);
+      }
+      return [...ordered, ...otherColumns];
+    }
+    
+    return filteredColumns;
+  }, [columns, visibleColumns, outerGroupField, innerGroupField, columnTypes]);
 
   const frozenCols = useMemo(
     () => isEmpty(orderedColumns) ? [] : [head(orderedColumns)],
@@ -983,128 +989,111 @@ export default function DataTableComponent({
     });
   }, [safeData, filters, columns, columnTypes, multiselectColumns]);
 
-  const sortedData = useMemo(() => {
-    if (isEmpty(filteredData) || isEmpty(multiSortMeta)) {
-      return filteredData;
-    }
-
-    const fields = multiSortMeta.map(s => s.field);
-    const orders = multiSortMeta.map(s => s.order === 1 ? 'asc' : 'desc');
-    
-    return orderBy(filteredData, fields, orders);
-  }, [filteredData, multiSortMeta]);
-
-  // Grouping logic: transform data based on outerGroupField and innerGroupField
+  // Group filtered data by outerGroupField if set
   const groupedData = useMemo(() => {
-    if (isEmpty(sortedData) || !isArray(sortedData)) return [];
-    
-    // No grouping fields selected: return as is
-    if (!outerGroupField && !innerGroupField) {
-      return sortedData;
-    }
+    if (!outerGroupField || isEmpty(filteredData)) return filteredData;
 
-    // Only outer group selected: group by outer group but don't aggregate
-    if (outerGroupField && !innerGroupField) {
-      // Return data grouped by outer group (PrimeReact will handle expandable headers)
-      // We need to sort by outer group field first
-      // Ensure all rows have the outer group field
-      const validData = sortedData.filter(row => row && typeof row === 'object' && !isNil(get(row, outerGroupField)));
-      return orderBy(validData, [outerGroupField], ['asc']);
-    }
+    // Group by outerGroupField
+    const groups = {};
+    filteredData.forEach((row) => {
+      // Skip group rows
+      if (row.__isGroupRow__) return;
+      
+      const groupKey = get(row, outerGroupField);
+      const key = isNil(groupKey) ? '__null__' : String(groupKey);
+      if (!groups[key]) {
+        groups[key] = [];
+      }
+      groups[key].push(row);
+    });
 
-    // Both outer and inner group selected: aggregate data
-    if (outerGroupField && innerGroupField) {
-      // Filter out rows that don't have both group fields
-      const validData = sortedData.filter(row => 
-        row && 
-        typeof row === 'object' && 
-        !isNil(get(row, outerGroupField)) && 
-        !isNil(get(row, innerGroupField))
-      );
-      
-      if (isEmpty(validData)) return [];
-      
-      // Group by outer group first
-      const outerGroups = groupBy(validData, (row) => String(get(row, outerGroupField, '')));
-      
-      const aggregatedRows = [];
-      
-      // Process each outer group
-      Object.keys(outerGroups).forEach((outerKey) => {
-        const outerGroupRows = outerGroups[outerKey];
-        
-        if (isEmpty(outerGroupRows)) return;
-        
-        // Group by inner group within this outer group
-        const innerGroups = groupBy(outerGroupRows, (row) => String(get(row, innerGroupField, '')));
-        
+    // Transform groups into expandable rows
+    return Object.entries(groups).map(([groupKey, rows]) => {
+      let innerData = rows;
+
+      // If innerGroupField is set, aggregate within each group
+      if (innerGroupField && !isEmpty(rows)) {
+        const innerGroups = {};
+        rows.forEach((row) => {
+          const innerKey = get(row, innerGroupField);
+          const key = isNil(innerKey) ? '__null__' : String(innerKey);
+          if (!innerGroups[key]) {
+            innerGroups[key] = [];
+          }
+          innerGroups[key].push(row);
+        });
+
         // Aggregate each inner group
-        Object.keys(innerGroups).forEach((innerKey) => {
-          const innerGroupRows = innerGroups[innerKey];
+        innerData = Object.entries(innerGroups).map(([innerKey, innerRows]) => {
+          const aggregated = {};
           
-          if (isEmpty(innerGroupRows)) return;
-          
-          // Create aggregated row
-          const aggregatedRow = {
-            // Mark as aggregated row
-            __isGrouped: true,
-            __outerGroupKey: outerKey,
-            __innerGroupKey: innerKey,
-          };
-          
-          // Set pivot fields as first two columns
-          aggregatedRow[outerGroupField] = outerKey;
-          aggregatedRow[innerGroupField] = innerKey;
-          
-          // Aggregate numeric columns
+          // Get all columns from the first row
+          const firstRow = innerRows[0];
+          if (!firstRow) return null;
+
           columns.forEach((col) => {
-            if (col === outerGroupField || col === innerGroupField) {
-              // Already set above
-              return;
+            const colType = get(columnTypes, col, {});
+            
+            // For the inner group field, use the group value
+            if (col === innerGroupField) {
+              aggregated[col] = innerKey === '__null__' ? null : innerKey;
             }
-            
-            const colType = get(columnTypes, col);
-            const isNumericCol = get(colType, 'isNumeric', false);
-            const isDateCol = get(colType, 'isDate', false);
-            const isBooleanCol = get(colType, 'isBoolean', false);
-            
-            if (isNumericCol) {
-              // Sum numeric values
-              const sum = sumBy(innerGroupRows, (row) => {
+            // For the outer group field, use the group value
+            else if (col === outerGroupField) {
+              aggregated[col] = groupKey === '__null__' ? null : groupKey;
+            }
+            // For numeric columns, sum them
+            else if (get(colType, 'isNumeric')) {
+              const sum = sumBy(innerRows, (row) => {
                 const val = get(row, col);
                 if (isNil(val)) return 0;
                 const numVal = isNumber(val) ? val : toNumber(val);
                 return _isNaN(numVal) ? 0 : numVal;
               });
-              aggregatedRow[col] = sum;
-            } else if (isBooleanCol) {
-              // Take first boolean value (or most common)
-              aggregatedRow[col] = get(innerGroupRows[0], col);
-            } else if (isDateCol) {
-              // Take first date value
-              aggregatedRow[col] = get(innerGroupRows[0], col);
-            } else {
-              // For non-numeric: take first value or concatenate unique values
-              const uniqueValues = compact(uniq(innerGroupRows.map(row => get(row, col))));
-              aggregatedRow[col] = uniqueValues.length === 1 ? uniqueValues[0] : uniqueValues.join(', ');
+              aggregated[col] = sum;
+            }
+            // For other columns, take the first non-null value or first value
+            else {
+              const firstNonNull = innerRows.find(row => !isNil(get(row, col)));
+              aggregated[col] = firstNonNull ? get(firstNonNull, col) : get(firstRow, col);
             }
           });
-          
-          aggregatedRows.push(aggregatedRow);
-        });
-      });
-      
-      // Sort by outer group, then inner group
-      return orderBy(aggregatedRows, [outerGroupField, innerGroupField], ['asc', 'asc']);
+
+          return aggregated;
+        }).filter(Boolean);
+      }
+
+      // Create a summary row for the outer group
+      const summaryRow = { ...rows[0] };
+      // Use groupKey as the unique identifier (it's already a string from the grouping)
+      summaryRow.__groupKey__ = groupKey;
+      summaryRow.__groupRows__ = innerData;
+      summaryRow.__isGroupRow__ = true;
+
+      return summaryRow;
+    });
+  }, [filteredData, outerGroupField, innerGroupField, columns, columnTypes]);
+
+  // Use grouped data if outerGroupField is set, otherwise use filteredData
+  const dataForSorting = useMemo(() => {
+    return outerGroupField ? groupedData : filteredData;
+  }, [outerGroupField, groupedData, filteredData]);
+
+  const sortedData = useMemo(() => {
+    if (isEmpty(dataForSorting) || isEmpty(multiSortMeta)) {
+      return dataForSorting;
     }
 
-    return isArray(sortedData) ? sortedData : [];
-  }, [sortedData, outerGroupField, innerGroupField, columns, columnTypes]);
+    const fields = multiSortMeta.map(s => s.field);
+    const orders = multiSortMeta.map(s => s.order === 1 ? 'asc' : 'desc');
+    
+    return orderBy(dataForSorting, fields, orders);
+  }, [dataForSorting, multiSortMeta]);
+
 
   const calculateSums = useMemo(() => {
     const sums = {};
-    // Use groupedData if inner group is selected (aggregated), otherwise use filteredData
-    const dataForSums = (innerGroupField && outerGroupField) ? groupedData : filteredData;
+    const dataForSums = filteredData;
     if (isEmpty(dataForSums)) return sums;
 
     columns.forEach((col) => {
@@ -1125,23 +1114,12 @@ export default function DataTableComponent({
       }
     });
     return sums;
-  }, [filteredData, groupedData, innerGroupField, outerGroupField, columns, isNumericValue, columnTypes]);
+  }, [filteredData, columns, isNumericValue, columnTypes]);
 
   const paginatedData = useMemo(() => {
-    if (!isArray(groupedData)) return [];
-    
-    // When outer group is enabled, ensure all rows have the grouping field
-    let validData = groupedData;
-    if (outerGroupField) {
-      validData = groupedData.filter(row => 
-        row && 
-        typeof row === 'object' && 
-        !isNil(get(row, outerGroupField))
-      );
-    }
-    
-    return validData.slice(first, first + rows);
-  }, [groupedData, first, rows, outerGroupField]);
+    if (!isArray(sortedData)) return [];
+    return sortedData.slice(first, first + rows);
+  }, [sortedData, first, rows]);
 
   const footerTemplate = (column, isFirstColumn = false) => {
     if (!enableSummation) return null;
@@ -1437,14 +1415,80 @@ export default function DataTableComponent({
     );
   }, [columnTypes, booleanBodyTemplate, dateBodyTemplate, formatCellValue]);
 
+  // Check if a row can be expanded
+  const allowExpansion = useCallback((rowData) => {
+    return outerGroupField && rowData.__isGroupRow__ && rowData.__groupRows__ && rowData.__groupRows__.length > 0;
+  }, [outerGroupField]);
+
+  // Row expansion template - shows nested table with same headers
+  const rowExpansionTemplate = useCallback((rowData) => {
+    if (!rowData.__groupRows__ || isEmpty(rowData.__groupRows__)) {
+      return null;
+    }
+
+    const nestedData = rowData.__groupRows__;
+    // Remove outerGroupField from nested table, add innerGroupField first (if set)
+    let nestedColumns = orderedColumns.filter(col => col !== outerGroupField);
+    if (innerGroupField) {
+      // Add innerGroupField to nested table (it's excluded from main table)
+      // Ensure it appears first
+      if (includes(nestedColumns, innerGroupField)) {
+        nestedColumns = [
+          innerGroupField,
+          ...nestedColumns.filter(col => col !== innerGroupField)
+        ];
+      } else {
+        // Add innerGroupField if it's not already in the columns
+        nestedColumns = [innerGroupField, ...nestedColumns];
+      }
+    }
+
+    return (
+      <div className="p-3 bg-gray-50">
+        <div className="text-xs font-semibold text-gray-700 mb-2">
+          {innerGroupField 
+            ? `Aggregated by ${formatHeaderName(innerGroupField)}` 
+            : `${nestedData.length} row${nestedData.length !== 1 ? 's' : ''}`}
+        </div>
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <DataTable
+            value={nestedData}
+            showGridlines
+            stripedRows
+            className="p-datatable-sm"
+            style={{ minWidth: '100%' }}
+          >
+            {nestedColumns.map((col) => {
+              const colType = get(columnTypes, col);
+              const isNumericCol = get(colType, 'isNumeric', false);
+              return (
+                <Column
+                  key={col}
+                  field={col}
+                  header={formatHeaderName(col)}
+                  body={getBodyTemplate(col)}
+                  align={isNumericCol ? 'right' : 'left'}
+                  style={{
+                    minWidth: `${get(calculateColumnWidths, col, 120)}px`,
+                    width: `${get(calculateColumnWidths, col, 120)}px`,
+                  }}
+                />
+              );
+            })}
+          </DataTable>
+        </div>
+      </div>
+    );
+  }, [outerGroupField, innerGroupField, orderedColumns, columnTypes, formatHeaderName, getBodyTemplate, calculateColumnWidths]);
+
   const onPageChange = (event) => {
     setFirst(event.first);
     setRows(event.rows);
   };
 
   const exportToXLSX = useCallback(() => {
-    // Prepare data for export - use groupedData (filtered, sorted, and grouped)
-    const exportData = groupedData.map((row) => {
+    // Prepare data for export - use sortedData (filtered and sorted)
+    const exportData = sortedData.map((row) => {
       const exportRow = {};
       columns.forEach((col) => {
         const value = get(row, col);
@@ -1475,7 +1519,7 @@ export default function DataTableComponent({
 
     // Write file
     XLSX.writeFile(wb, filename);
-  }, [groupedData, columns, columnTypes, formatHeaderName, formatCellValue, isTruthyBoolean]);
+  }, [sortedData, columns, columnTypes, formatHeaderName, formatCellValue, isTruthyBoolean]);
 
   if (isEmpty(safeData)) {
     return (
@@ -1516,7 +1560,7 @@ export default function DataTableComponent({
       <div className="mb-4 flex items-center justify-end">
         <button
           onClick={exportToXLSX}
-          disabled={isEmpty(groupedData)}
+          disabled={isEmpty(sortedData)}
           className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
           title="Export to Excel"
         >
@@ -1578,48 +1622,17 @@ export default function DataTableComponent({
           className="p-datatable-sm w-full"
           style={{ minWidth: '100%' }}
           filterDisplay={enableFilter ? "row" : undefined}
-          {...(outerGroupField && isArray(paginatedData) && paginatedData.length > 0 ? {
-            rowGroupMode: "subheader",
-            groupRowsBy: outerGroupField,
-            expandableRowGroups: true,
-            expandedRows: isArray(expandedRows) ? expandedRows : [],
-            onRowToggle: (e) => {
-              if (e && e.data !== undefined) {
-                setExpandedRows(isArray(e.data) ? e.data : []);
-              }
-            },
-            rowGroupHeaderTemplate: (data) => {
-              if (!data || typeof data !== 'object') return null;
-              const groupValue = get(data, outerGroupField, '');
-              return (
-                <React.Fragment>
-                  <span className="font-bold text-gray-900">{formatHeaderName(outerGroupField)}: {formatCellValue(groupValue, get(columnTypes, outerGroupField))}</span>
-                  {innerGroupField && (
-                    <span className="ml-2 text-xs text-gray-500">
-                      ({isArray(groupedData) ? groupedData.filter(row => row && get(row, outerGroupField) === groupValue).length : 0} items)
-                    </span>
-                  )}
-                </React.Fragment>
-              );
-            },
-            ...(outerGroupField && !innerGroupField ? {
-              rowGroupFooterTemplate: (data) => {
-                if (!data || typeof data !== 'object') return null;
-                const groupValue = get(data, outerGroupField, '');
-                const groupRows = isArray(groupedData) ? groupedData.filter(row => row && get(row, outerGroupField) === groupValue) : [];
-                return (
-                  <React.Fragment>
-                    <td colSpan={orderedColumns.length}>
-                      <div className="flex justify-end font-bold w-full text-sm text-gray-700">
-                        Total: {groupRows.length} row{groupRows.length !== 1 ? 's' : ''}
-                      </div>
-                    </td>
-                  </React.Fragment>
-                );
-              }
-            } : {})
-          } : {})}
+          expandedRows={expandedRows}
+          onRowToggle={(e) => setExpandedRows(e.data)}
+          rowExpansionTemplate={outerGroupField ? rowExpansionTemplate : undefined}
+          dataKey={outerGroupField ? "__groupKey__" : undefined}
         >
+          {outerGroupField && (
+            <Column
+              expander={allowExpansion}
+              style={{ width: '3rem' }}
+            />
+          )}
           {frozenCols.map((col, index) => {
             const colType = get(columnTypes, col);
             const isNumericCol = get(colType, 'isNumeric', false);
@@ -1678,7 +1691,7 @@ export default function DataTableComponent({
         <Paginator
           first={first}
           rows={rows}
-          totalRecords={groupedData.length}
+          totalRecords={sortedData.length}
           rowsPerPageOptions={rowsPerPageOptions}
           onPageChange={onPageChange}
           template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink RowsPerPageDropdown"
