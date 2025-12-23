@@ -307,7 +307,7 @@ function CustomTriStateCheckbox({ value, onChange }) {
   );
 }
 
-function MultiselectFilter({ value, options, onChange, placeholder = "Select...", fieldName }) {
+function MultiselectFilter({ value, options, onChange, placeholder = "Select...", fieldName, itemLabel = "Filter" }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0, width: 0 });
@@ -537,7 +537,7 @@ function MultiselectFilter({ value, options, onChange, placeholder = "Select..."
           }`}
         >
           <span className="truncate">
-            {isEmpty(selectedValues) ? placeholder : `${selectedValues.length} Filter${selectedValues.length !== 1 ? 's' : ''}`}
+            {isEmpty(selectedValues) ? placeholder : `${selectedValues.length} ${itemLabel}${selectedValues.length !== 1 ? 's' : ''}`}
           </span>
           <i className={`pi ${isOpen ? 'pi-chevron-up' : 'pi-chevron-down'} text-[10px] ml-1 flex-shrink-0`}></i>
         </button>
@@ -602,6 +602,7 @@ export default function DataTableComponent({
   enableSummation = true,
   textFilterColumns = [], // Fields that should use text search box instead of multiselect
   visibleColumns = [], // Fields that should be visible (empty array means show all)
+  onVisibleColumnsChange, // Callback for when visible columns change
   redFields = [],
   greenFields = [],
   outerGroupField = null, // Field to group by for row expansion
@@ -784,6 +785,27 @@ export default function DataTableComponent({
   const formatHeaderName = useCallback((key) => {
     return startCase(key.split('__').join(' ').split('_').join(' '));
   }, []);
+
+  // Compute available columns for visibility selector based on mode
+  const availableColumnsForVisibility = useMemo(() => {
+    if (isEmpty(columns)) return [];
+    
+    // When both outerGroupField and innerGroupField are set, show only numeric columns (plus group fields)
+    if (outerGroupField && innerGroupField) {
+      return columns.filter(col => {
+        // Always include group fields
+        if (col === outerGroupField || col === innerGroupField) {
+          return true;
+        }
+        // Include only numeric columns
+        const colType = get(columnTypes, col, {});
+        return get(colType, 'isNumeric', false);
+      });
+    }
+    
+    // Default: show all columns
+    return columns;
+  }, [columns, outerGroupField, innerGroupField, columnTypes]);
 
   const formatCellValue = useCallback((value, colType) => {
     if (isNil(value)) return '';
@@ -1556,17 +1578,37 @@ export default function DataTableComponent({
         </div>
       )}
 
-      {/* Export button */}
-      <div className="mb-4 flex items-center justify-end">
-        <button
-          onClick={exportToXLSX}
-          disabled={isEmpty(sortedData)}
-          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-          title="Export to Excel"
-        >
-          <i className="pi pi-file-excel"></i>
-          <span>Export XLSX</span>
-        </button>
+      {/* Controls Row: Visibility Selector and Export button */}
+      <div className="mb-4 flex items-center justify-between gap-4 flex-wrap">
+        {/* Visibility Control */}
+        {onVisibleColumnsChange && !isEmpty(availableColumnsForVisibility) && (
+          <div className="flex-1 min-w-[200px] max-w-md">
+            <MultiselectFilter
+              value={visibleColumns}
+              options={availableColumnsForVisibility.map(col => ({
+                label: formatHeaderName(col),
+                value: col,
+              }))}
+              onChange={onVisibleColumnsChange}
+              placeholder={`Visible Columns${outerGroupField && innerGroupField ? ' (numeric only)' : ''}`}
+              fieldName="columns"
+              itemLabel="Visible Column"
+            />
+          </div>
+        )}
+        
+        {/* Export button */}
+        <div className="flex-shrink-0">
+          <button
+            onClick={exportToXLSX}
+            disabled={isEmpty(sortedData)}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+            title="Export to Excel"
+          >
+            <i className="pi pi-file-excel"></i>
+            <span>Export XLSX</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter Chips */}

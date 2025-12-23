@@ -427,6 +427,7 @@ export default function Home() {
               enableSummation={enableSummation}
               textFilterColumns={textFilterColumns}
               visibleColumns={visibleColumns}
+              onVisibleColumnsChange={setVisibleColumns}
               redFields={redFields}
               greenFields={greenFields}
               outerGroupField={outerGroupField}
