@@ -335,6 +335,7 @@ export default function DataTableControls({
   enableFilter,
   enableSummation,
   rowsPerPageOptions,
+  defaultRows,
   columns = [],
   textFilterColumns = [], // Fields that should use text search box instead of multiselect
   visibleColumns = [], // Fields that should be visible (empty means show all)
@@ -346,6 +347,7 @@ export default function DataTableControls({
   onFilterChange,
   onSummationChange,
   onRowsPerPageOptionsChange,
+  onDefaultRowsChange,
   onTextFilterColumnsChange,
   onVisibleColumnsChange,
   onRedFieldsChange,
@@ -354,25 +356,71 @@ export default function DataTableControls({
   onInnerGroupFieldChange,
 }) {
   const [isExpanded, setIsExpanded] = React.useState(true);
-  const [customOptions, setCustomOptions] = React.useState(rowsPerPageOptions.join(', '));
+  const [customOptions, setCustomOptions] = React.useState(
+    Array.isArray(rowsPerPageOptions) ? rowsPerPageOptions.join(', ') : ''
+  );
+  const isInternalUpdateRef = React.useRef(false);
 
   React.useEffect(() => {
-    setCustomOptions(rowsPerPageOptions.join(', '));
+    // Only sync from props if the change came from outside (not from our handleOptionsChange)
+    // This prevents the input from being reset while the user is typing
+    if (!isInternalUpdateRef.current && Array.isArray(rowsPerPageOptions)) {
+      const propsValue = rowsPerPageOptions.join(', ');
+      // Only update if the props value is different from current input
+      // This allows users to type freely without interruption
+      if (propsValue !== customOptions) {
+        setCustomOptions(propsValue);
+      }
+    }
+    // Reset the flag after checking
+    isInternalUpdateRef.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowsPerPageOptions]);
 
   const handleOptionsChange = (value) => {
     setCustomOptions(value);
     
-    const options = chain(value)
-      .split(',')
-      .map(v => parseInt(v.trim(), 10))
-      .filter(v => !isNaN(v) && v > 0)
-      .uniq()
-      .sortBy()
-      .value();
+    // Mark that this is an internal update to prevent useEffect from resetting the input
+    isInternalUpdateRef.current = true;
     
-    if (!isEmpty(options)) {
+    // Parse the comma-separated values
+    // Split by comma, trim each value, and parse to integer
+    const rawValues = value.split(',').map(v => v.trim());
+    
+    // Track seen values to identify duplicates
+    const seen = new Set();
+    const validOptions = [];
+    
+    rawValues.forEach(v => {
+      const parsed = parseInt(v, 10);
+      // Only process valid values (not NaN, > 0)
+      if (!isNaN(parsed) && parsed > 0) {
+        // If it's a duplicate, ignore it (don't add to validOptions)
+        // This allows users to type "10, 10" freely without interference
+        if (!seen.has(parsed)) {
+          seen.add(parsed);
+          validOptions.push(parsed);
+        }
+        // Duplicates are silently ignored - they don't affect the options
+      }
+      // Invalid values are also ignored
+    });
+    
+    // Sort the unique valid options
+    const options = validOptions.sort((a, b) => a - b);
+    
+    // Update options with only valid, unique values
+    // Invalid values and duplicates are ignored, allowing free typing
+    if (options.length > 0) {
       onRowsPerPageOptionsChange(options);
+      
+      // If current defaultRows is not in the new options, update it to the first option
+      if (defaultRows && !options.includes(defaultRows) && onDefaultRowsChange) {
+        const newDefault = options[0];
+        if (typeof newDefault === 'number' && !isNaN(newDefault) && newDefault > 0) {
+          onDefaultRowsChange(newDefault);
+        }
+      }
     }
   };
 
@@ -613,20 +661,49 @@ export default function DataTableControls({
 
           <div>
             <h4 className="text-xs font-medium text-gray-700 mb-3">Pagination</h4>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-2">
-                Available Options (comma-separated)
-              </label>
-              <input
-                type="text"
-                value={customOptions}
-                onChange={(e) => handleOptionsChange(e.target.value)}
-                placeholder="5, 10, 25, 50, 100"
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Enter numbers separated by commas. These options will be available in the paginator dropdown.
-              </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-2">
+                  Available Options (comma-separated)
+                </label>
+                <input
+                  type="text"
+                  value={customOptions}
+                  onChange={(e) => handleOptionsChange(e.target.value)}
+                  placeholder="5, 10, 25, 50, 100"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Enter numbers separated by commas. These options will be available in the paginator dropdown.
+                </p>
+              </div>
+              
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-2">
+                  Default Rows Per Page
+                </label>
+                <select
+                  key={`default-rows-${rowsPerPageOptions?.join('-') || ''}`}
+                  value={defaultRows || ''}
+                  onChange={(e) => {
+                    const value = parseInt(e.target.value, 10);
+                    if (!isNaN(value) && value > 0 && onDefaultRowsChange) {
+                      onDefaultRowsChange(value);
+                    }
+                  }}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="">Select default...</option>
+                  {rowsPerPageOptions && Array.isArray(rowsPerPageOptions) && rowsPerPageOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Select the default number of rows to display per page. This value will be saved and used on page load.
+                </p>
+              </div>
             </div>
           </div>
         </div>

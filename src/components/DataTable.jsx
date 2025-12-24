@@ -614,6 +614,7 @@ export default function DataTableComponent({
   const [scrollHeightValue, setScrollHeightValue] = useState('600px');
   const [multiSortMeta, setMultiSortMeta] = useState([]);
   const [expandedRows, setExpandedRows] = useState(null);
+  const [freezeFirstColumn, setFreezeFirstColumn] = useState(false);
 
   useEffect(() => {
     setRows(defaultRows);
@@ -1597,8 +1598,20 @@ export default function DataTableComponent({
           </div>
         )}
         
-        {/* Export button */}
-        <div className="flex-shrink-0">
+        {/* Export and Freeze buttons */}
+        <div className="flex-shrink-0 flex items-center gap-2">
+          <button
+            onClick={() => setFreezeFirstColumn(!freezeFirstColumn)}
+            className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+              freezeFirstColumn
+                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+            title={freezeFirstColumn ? 'Unlock first column' : 'Lock first column'}
+          >
+            <i className={`pi ${freezeFirstColumn ? 'pi-lock' : 'pi-unlock'}`}></i>
+            <span>{freezeFirstColumn ? 'Unlock Column' : 'Lock Column'}</span>
+          </button>
           <button
             onClick={exportToXLSX}
             disabled={isEmpty(sortedData)}
@@ -1685,7 +1698,7 @@ export default function DataTableComponent({
                 field={col}
                 header={formatHeaderName(col)}
                 sortable={enableSort}
-                frozen
+                frozen={freezeFirstColumn}
                 style={{
                   minWidth: `${get(calculateColumnWidths, col, 120)}px`,
                   width: `${get(calculateColumnWidths, col, 120)}px`,

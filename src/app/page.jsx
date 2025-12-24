@@ -167,12 +167,68 @@ function useLocalStorageString(key, defaultValue) {
   return [value, setStoredValue];
 }
 
+// Custom hook for localStorage with proper JSON serialization for numbers
+function useLocalStorageNumber(key, defaultValue) {
+  const [value, setValue] = useState(() => {
+    if (typeof window === 'undefined') return defaultValue;
+    try {
+      const item = window.localStorage.getItem(key);
+      if (item === null || item === undefined) return defaultValue;
+      const parsed = JSON.parse(item);
+      // Accept number values
+      return (typeof parsed === 'number' && !isNaN(parsed) && parsed > 0) ? parsed : defaultValue;
+    } catch (error) {
+      // If parsing fails, try to clean up invalid data
+      try {
+        window.localStorage.removeItem(key);
+      } catch { }
+      return defaultValue;
+    }
+  });
+
+  // Sync with localStorage on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const item = window.localStorage.getItem(key);
+      if (item !== null && item !== undefined) {
+        const parsed = JSON.parse(item);
+        if (typeof parsed === 'number' && !isNaN(parsed) && parsed > 0) {
+          setValue(parsed);
+        }
+      }
+    } catch (error) {
+      // Ignore errors during sync
+    }
+  }, [key]);
+
+  const setStoredValue = (newValue) => {
+    try {
+      // Accept number values
+      if (typeof newValue === 'number' && !isNaN(newValue) && newValue > 0) {
+        const serialized = JSON.stringify(newValue);
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(key, serialized);
+        }
+        setValue(newValue);
+      } else {
+        console.warn(`Attempted to set invalid number value for "${key}":`, newValue);
+      }
+    } catch (error) {
+      console.error(`Error setting localStorage key "${key}":`, error);
+    }
+  };
+
+  return [value, setStoredValue];
+}
+
 export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [enableSort, setEnableSort] = useLocalStorageBoolean('datatable-enableSort', true);
   const [enableFilter, setEnableFilter] = useLocalStorageBoolean('datatable-enableFilter', true);
   const [enableSummation, setEnableSummation] = useLocalStorageBoolean('datatable-enableSummation', true);
   const [rowsPerPageOptionsRaw, setRowsPerPageOptionsRaw] = useLocalStorageArray('datatable-rowsPerPageOptions', [5, 10, 25, 50, 100, 200]);
+  const [defaultRowsRaw, setDefaultRowsRaw] = useLocalStorageNumber('datatable-defaultRows', 10);
   const [textFilterColumnsRaw, setTextFilterColumnsRaw] = useLocalStorageArray('datatable-textFilterColumns', []);
   const [visibleColumnsRaw, setVisibleColumnsRaw] = useLocalStorageArray('datatable-visibleColumns', []);
   const [redFieldsRaw, setRedFieldsRaw] = useLocalStorageArray('datatable-redFields', []);
@@ -267,6 +323,24 @@ export default function Home() {
             window.localStorage.removeItem(key);
           }
         });
+
+        // Validate number keys (defaultRows)
+        const numberKeys = ['datatable-defaultRows'];
+        numberKeys.forEach(key => {
+          try {
+            const item = window.localStorage.getItem(key);
+            if (item) {
+              const parsed = JSON.parse(item);
+              // If it's not a number or is invalid, remove it
+              if (typeof parsed !== 'number' || isNaN(parsed) || parsed <= 0) {
+                window.localStorage.removeItem(key);
+              }
+            }
+          } catch (error) {
+            // If parsing fails, remove the corrupted item
+            window.localStorage.removeItem(key);
+          }
+        });
       } catch (error) {
         // Ignore cleanup errors
         console.warn('Error during localStorage cleanup:', error);
@@ -288,6 +362,36 @@ export default function Home() {
     }
     return rowsPerPageOptionsRaw;
   }, [rowsPerPageOptionsRaw]);
+
+  // Ensure defaultRows is always a valid number and is in the available options
+  const defaultRows = useMemo(() => {
+    if (typeof defaultRowsRaw !== 'number' || isNaN(defaultRowsRaw) || defaultRowsRaw <= 0) {
+      // Default to first option in rowsPerPageOptions if available, otherwise 10
+      return rowsPerPageOptions[0] || 10;
+    }
+    // Check if defaultRows is in the available options
+    if (!rowsPerPageOptions.includes(defaultRowsRaw)) {
+      // If not, return the first option (will be updated via useEffect)
+      return rowsPerPageOptions[0] || 10;
+    }
+    return defaultRowsRaw;
+  }, [defaultRowsRaw, rowsPerPageOptions]);
+
+  // Update defaultRows in localStorage if it's not in the available options
+  useEffect(() => {
+    if (Array.isArray(rowsPerPageOptions) && rowsPerPageOptions.length > 0) {
+      const currentDefault = defaultRowsRaw;
+      // If current default is not in the options, update it to the first option
+      if (typeof currentDefault === 'number' && !isNaN(currentDefault) && currentDefault > 0) {
+        if (!rowsPerPageOptions.includes(currentDefault)) {
+          const newDefault = rowsPerPageOptions[0];
+          if (typeof newDefault === 'number' && !isNaN(newDefault) && newDefault > 0) {
+            setDefaultRowsRaw(newDefault);
+          }
+        }
+      }
+    }
+  }, [rowsPerPageOptions, defaultRowsRaw, setDefaultRowsRaw]);
 
   // Ensure textFilterColumns is always an array
   const textFilterColumns = useMemo(() => {
@@ -324,6 +428,12 @@ export default function Home() {
   const setRowsPerPageOptions = (value) => {
     if (Array.isArray(value)) {
       setRowsPerPageOptionsRaw(value);
+    }
+  };
+
+  const setDefaultRows = (value) => {
+    if (typeof value === 'number' && !isNaN(value) && value > 0) {
+      setDefaultRowsRaw(value);
     }
   };
 
@@ -398,6 +508,7 @@ export default function Home() {
               enableFilter={enableFilter}
               enableSummation={enableSummation}
               rowsPerPageOptions={rowsPerPageOptions}
+              defaultRows={defaultRows}
               columns={columns}
               textFilterColumns={textFilterColumns}
               visibleColumns={visibleColumns}
@@ -409,6 +520,7 @@ export default function Home() {
               onFilterChange={setEnableFilter}
               onSummationChange={setEnableSummation}
               onRowsPerPageOptionsChange={setRowsPerPageOptions}
+              onDefaultRowsChange={setDefaultRows}
               onTextFilterColumnsChange={setTextFilterColumns}
               onVisibleColumnsChange={setVisibleColumns}
               onRedFieldsChange={setRedFields}
@@ -420,7 +532,7 @@ export default function Home() {
             <DataTableComponent
               data={data}
               rowsPerPageOptions={rowsPerPageOptions}
-              defaultRows={rowsPerPageOptions[0] || 5}
+              defaultRows={defaultRows}
               scrollable={true}
               enableSort={enableSort}
               enableFilter={enableFilter}
