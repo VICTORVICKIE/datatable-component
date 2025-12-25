@@ -1771,6 +1771,227 @@ export default function DataTableComponent({
     setRows(event.rows);
   };
 
+  // Reusable Table Controls Component
+  const TableControls = ({ showFullscreenButton = true, controlsRowClassName = "" }) => (
+    <div className={`mb-4 flex items-center justify-between gap-4 flex-wrap ${controlsRowClassName}`}>
+      {/* Left side: Visibility Control and Lock button */}
+      <div className="flex-shrink-0 flex items-center gap-2">
+        {onVisibleColumnsChange && !isEmpty(availableColumnsForVisibility) && (
+          <IconOnlyMultiselectFilter
+            value={visibleColumns}
+            options={availableColumnsForVisibility.map(col => ({
+              label: formatHeaderName(col),
+              value: col,
+            }))}
+            onChange={onVisibleColumnsChange}
+            placeholder="Visible Columns"
+            fieldName="columns"
+            itemLabel="Visible Column"
+            icon="pi-eye"
+          />
+        )}
+        <button
+          onClick={() => setFreezeFirstColumn(!freezeFirstColumn)}
+          className={`p-2 rounded-lg transition-colors flex items-center justify-center ${freezeFirstColumn
+              ? 'bg-blue-600 text-white hover:bg-blue-700'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          title={freezeFirstColumn ? 'Unlock first column' : 'Lock first column'}
+        >
+          <i className={`pi ${freezeFirstColumn ? 'pi-lock' : 'pi-unlock'}`}></i>
+        </button>
+      </div>
+
+      {/* Right side: Fullscreen and Export buttons */}
+      <div className="flex-shrink-0 flex items-center gap-2">
+        {showFullscreenButton && (
+          <button
+            onClick={() => setIsFullscreen(true)}
+            className="p-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center"
+            title="View table in fullscreen"
+          >
+            <i className="pi pi-window-maximize"></i>
+          </button>
+        )}
+        <button
+          onClick={exportToXLSX}
+          disabled={isEmpty(sortedData)}
+          className="p-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+          title="Export to Excel"
+        >
+          <i className="pi pi-file-excel"></i>
+        </button>
+      </div>
+    </div>
+  );
+
+  // Reusable Filter Chips Component
+  const FilterChips = ({ className = "" }) => {
+    if (!enableFilter || isEmpty(activeFilters)) return null;
+    
+    return (
+      <div className={`mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg ${className}`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-medium text-gray-600 mr-1">Active Filters:</span>
+          {activeFilters.map(({ column, formattedValue }) => (
+            <div
+              key={column}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-800 rounded-full text-xs font-medium"
+            >
+              <span>
+                {formatHeaderName(column)}: {formattedValue}
+              </span>
+              <button
+                onClick={() => clearFilter(column)}
+                className="ml-1 hover:bg-blue-200 rounded-full p-0.5 transition-colors"
+                title="Remove filter"
+                type="button"
+              >
+                <i className="pi pi-times text-[10px]"></i>
+              </button>
+            </div>
+          ))}
+          <button
+            onClick={clearAllFilters}
+            className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-100 text-red-700 rounded-full text-xs font-medium hover:bg-red-200 transition-colors"
+            title="Clear all filters"
+            type="button"
+          >
+            <i className="pi pi-times-circle text-xs"></i>
+            <span>Clear All</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // Reusable Table View Component
+  const TableView = ({ scrollHeight, containerClassName = "", containerStyle = {} }) => (
+    <div className={`border border-gray-200 rounded-lg w-full responsive-table-container ${containerClassName}`} style={{ position: 'relative', ...containerStyle }}>
+      <DataTable
+        value={isArray(paginatedData) ? paginatedData : []}
+        scrollable={scrollable}
+        scrollHeight={scrollHeight}
+        sortMode={enableSort ? "multiple" : undefined}
+        removableSort={enableSort}
+        multiSortMeta={multiSortMeta}
+        onSort={(e) => {
+          setMultiSortMeta(e.multiSortMeta || []);
+          setFirst(0);
+        }}
+        showGridlines
+        stripedRows
+        className="p-datatable-sm w-full"
+        style={{ minWidth: '100%' }}
+        filterDisplay={enableFilter ? "row" : undefined}
+        expandedRows={expandedRows}
+        onRowToggle={(e) => setExpandedRows(e.data)}
+        rowExpansionTemplate={outerGroupField ? rowExpansionTemplate : undefined}
+        dataKey={outerGroupField ? "__groupKey__" : undefined}
+      >
+        {outerGroupField && (
+          <Column
+            expander={allowExpansion}
+            style={{ width: '3rem' }}
+          />
+        )}
+        {frozenCols.map((col, index) => {
+          const colType = get(columnTypes, col);
+          const isNumericCol = get(colType, 'isNumeric', false);
+          const isFirstColumn = index === 0;
+          return (
+            <Column
+              key={`frozen-${col}`}
+              field={col}
+              header={formatHeaderName(col)}
+              sortable={enableSort}
+              frozen={freezeFirstColumn}
+              style={{
+                minWidth: `${get(calculateColumnWidths, col, 120)}px`,
+                width: `${get(calculateColumnWidths, col, 120)}px`,
+                maxWidth: `${get(calculateColumnWidths, col, 200)}px`
+              }}
+              filter={enableFilter}
+              filterElement={enableFilter ? getFilterElement(col) : undefined}
+              showFilterMenu={false}
+              showClearButton={false}
+              footer={footerTemplate(col, isFirstColumn)}
+              body={getBodyTemplate(col)}
+              align={isNumericCol ? 'right' : 'left'}
+            />
+          );
+        })}
+
+        {regularCols.map((col) => {
+          const colType = get(columnTypes, col);
+          const isNumericCol = get(colType, 'isNumeric', false);
+          return (
+            <Column
+              key={col}
+              field={col}
+              header={formatHeaderName(col)}
+              sortable={enableSort}
+              style={{
+                minWidth: `${get(calculateColumnWidths, col, 120)}px`,
+                width: `${get(calculateColumnWidths, col, 120)}px`,
+                maxWidth: `${get(calculateColumnWidths, col, 400)}px`
+              }}
+              filter={enableFilter}
+              filterElement={enableFilter ? getFilterElement(col) : undefined}
+              showFilterMenu={false}
+              showClearButton={false}
+              footer={footerTemplate(col)}
+              body={getBodyTemplate(col)}
+              align={isNumericCol ? 'right' : 'left'}
+            />
+          );
+        })}
+      </DataTable>
+    </div>
+  );
+
+  // Reusable Paginator Wrapper Component
+  const PaginatorWrapper = ({ className = "" }) => (
+    <div className={`mt-4 ${className}`}>
+      <Paginator
+        first={first}
+        rows={rows}
+        totalRecords={sortedData.length}
+        rowsPerPageOptions={rowsPerPageOptions}
+        onPageChange={onPageChange}
+        template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink RowsPerPageDropdown"
+      />
+    </div>
+  );
+
+  // Reusable Feature Status Indicators Component
+  const FeatureStatusIndicators = ({ className = "" }) => {
+    if (enableSort && enableFilter && enableSummation) return null;
+    
+    return (
+      <div className={`mb-3 flex flex-wrap gap-2 text-xs ${className}`}>
+        {!enableSort && (
+          <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
+            <i className="pi pi-info-circle mr-1"></i>
+            Sorting disabled
+          </span>
+        )}
+        {!enableFilter && (
+          <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
+            <i className="pi pi-info-circle mr-1"></i>
+            Filtering disabled
+          </span>
+        )}
+        {!enableSummation && (
+          <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
+            <i className="pi pi-info-circle mr-1"></i>
+            Summation disabled
+          </span>
+        )}
+      </div>
+    );
+  };
+
   const exportToXLSX = useCallback(() => {
     // Prepare data for export - use sortedData (filtered and sorted)
     const exportData = sortedData.map((row) => {
@@ -1818,207 +2039,11 @@ export default function DataTableComponent({
 
   return (
     <div className="w-full">
-      {(!enableSort || !enableFilter || !enableSummation) && (
-        <div className="mb-3 flex flex-wrap gap-2 text-xs">
-          {!enableSort && (
-            <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
-              <i className="pi pi-info-circle mr-1"></i>
-              Sorting disabled
-            </span>
-          )}
-          {!enableFilter && (
-            <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
-              <i className="pi pi-info-circle mr-1"></i>
-              Filtering disabled
-            </span>
-          )}
-          {!enableSummation && (
-            <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
-              <i className="pi pi-info-circle mr-1"></i>
-              Summation disabled
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Controls Row: Visibility Selector and Export button */}
-      <div className="mb-4 flex items-center justify-between gap-4 flex-wrap">
-        {/* Left side: Visibility Control and Lock button */}
-        <div className="flex-shrink-0 flex items-center gap-2">
-          {onVisibleColumnsChange && !isEmpty(availableColumnsForVisibility) && (
-            <IconOnlyMultiselectFilter
-              value={visibleColumns}
-              options={availableColumnsForVisibility.map(col => ({
-                label: formatHeaderName(col),
-                value: col,
-              }))}
-              onChange={onVisibleColumnsChange}
-              placeholder="Visible Columns"
-              fieldName="columns"
-              itemLabel="Visible Column"
-              icon="pi-eye"
-            />
-          )}
-          <button
-            onClick={() => setFreezeFirstColumn(!freezeFirstColumn)}
-            className={`p-2 rounded-lg transition-colors flex items-center justify-center ${freezeFirstColumn
-                ? 'bg-blue-600 text-white hover:bg-blue-700'
-                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-              }`}
-            title={freezeFirstColumn ? 'Unlock first column' : 'Lock first column'}
-          >
-            <i className={`pi ${freezeFirstColumn ? 'pi-lock' : 'pi-unlock'}`}></i>
-          </button>
-        </div>
-
-        {/* Right side: Fullscreen and Export buttons */}
-        <div className="flex-shrink-0 flex items-center gap-2">
-          <button
-            onClick={() => setIsFullscreen(true)}
-            className="p-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center"
-            title="View table in fullscreen"
-          >
-            <i className="pi pi-window-maximize"></i>
-          </button>
-          <button
-            onClick={exportToXLSX}
-            disabled={isEmpty(sortedData)}
-            className="p-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
-            title="Export to Excel"
-          >
-            <i className="pi pi-file-excel"></i>
-          </button>
-        </div>
-      </div>
-
-      {/* Filter Chips */}
-      {enableFilter && !isEmpty(activeFilters) && (
-        <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs font-medium text-gray-600 mr-1">Active Filters:</span>
-            {activeFilters.map(({ column, formattedValue }) => (
-              <div
-                key={column}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-800 rounded-full text-xs font-medium"
-              >
-                <span>
-                  {formatHeaderName(column)}: {formattedValue}
-                </span>
-                <button
-                  onClick={() => clearFilter(column)}
-                  className="ml-1 hover:bg-blue-200 rounded-full p-0.5 transition-colors"
-                  title="Remove filter"
-                  type="button"
-                >
-                  <i className="pi pi-times text-[10px]"></i>
-                </button>
-              </div>
-            ))}
-            <button
-              onClick={clearAllFilters}
-              className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-100 text-red-700 rounded-full text-xs font-medium hover:bg-red-200 transition-colors"
-              title="Clear all filters"
-              type="button"
-            >
-              <i className="pi pi-times-circle text-xs"></i>
-              <span>Clear All</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="border border-gray-200 rounded-lg w-full responsive-table-container" style={{ position: 'relative' }}>
-        <DataTable
-          value={isArray(paginatedData) ? paginatedData : []}
-          scrollable={scrollable}
-          scrollHeight={scrollHeightValue}
-          sortMode={enableSort ? "multiple" : undefined}
-          removableSort={enableSort}
-          multiSortMeta={multiSortMeta}
-          onSort={(e) => {
-            setMultiSortMeta(e.multiSortMeta || []);
-            setFirst(0);
-          }}
-          showGridlines
-          stripedRows
-          className="p-datatable-sm w-full"
-          style={{ minWidth: '100%' }}
-          filterDisplay={enableFilter ? "row" : undefined}
-          expandedRows={expandedRows}
-          onRowToggle={(e) => setExpandedRows(e.data)}
-          rowExpansionTemplate={outerGroupField ? rowExpansionTemplate : undefined}
-          dataKey={outerGroupField ? "__groupKey__" : undefined}
-        >
-          {outerGroupField && (
-            <Column
-              expander={allowExpansion}
-              style={{ width: '3rem' }}
-            />
-          )}
-          {frozenCols.map((col, index) => {
-            const colType = get(columnTypes, col);
-            const isNumericCol = get(colType, 'isNumeric', false);
-            const isFirstColumn = index === 0;
-            return (
-              <Column
-                key={`frozen-${col}`}
-                field={col}
-                header={formatHeaderName(col)}
-                sortable={enableSort}
-                frozen={freezeFirstColumn}
-                style={{
-                  minWidth: `${get(calculateColumnWidths, col, 120)}px`,
-                  width: `${get(calculateColumnWidths, col, 120)}px`,
-                  maxWidth: `${get(calculateColumnWidths, col, 200)}px`
-                }}
-                filter={enableFilter}
-                filterElement={enableFilter ? getFilterElement(col) : undefined}
-                showFilterMenu={false}
-                showClearButton={false}
-                footer={footerTemplate(col, isFirstColumn)}
-                body={getBodyTemplate(col)}
-                align={isNumericCol ? 'right' : 'left'}
-              />
-            );
-          })}
-
-          {regularCols.map((col) => {
-            const colType = get(columnTypes, col);
-            const isNumericCol = get(colType, 'isNumeric', false);
-            return (
-              <Column
-                key={col}
-                field={col}
-                header={formatHeaderName(col)}
-                sortable={enableSort}
-                style={{
-                  minWidth: `${get(calculateColumnWidths, col, 120)}px`,
-                  width: `${get(calculateColumnWidths, col, 120)}px`,
-                  maxWidth: `${get(calculateColumnWidths, col, 400)}px`
-                }}
-                filter={enableFilter}
-                filterElement={enableFilter ? getFilterElement(col) : undefined}
-                showFilterMenu={false}
-                showClearButton={false}
-                footer={footerTemplate(col)}
-                body={getBodyTemplate(col)}
-                align={isNumericCol ? 'right' : 'left'}
-              />
-            );
-          })}
-        </DataTable>
-      </div>
-
-      <div className="mt-4">
-        <Paginator
-          first={first}
-          rows={rows}
-          totalRecords={sortedData.length}
-          rowsPerPageOptions={rowsPerPageOptions}
-          onPageChange={onPageChange}
-          template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink RowsPerPageDropdown"
-        />
-      </div>
+      <FeatureStatusIndicators />
+      <TableControls showFullscreenButton={true} />
+      <FilterChips />
+      <TableView scrollHeight={scrollHeightValue} />
+      <PaginatorWrapper />
 
       {/* Fullscreen Dialog */}
       <Dialog
@@ -2030,201 +2055,15 @@ export default function DataTableComponent({
         onHide={() => setIsFullscreen(false)}
       >
         <div className="w-full h-full flex flex-col" style={{ height: '100%', maxHeight: '100%', minHeight: 0, overflow: 'hidden' }}>
-          {/* Feature Status Indicators */}
-          {(!enableSort || !enableFilter || !enableSummation) && (
-            <div className="mb-3 flex flex-wrap gap-2 text-xs flex-shrink-0">
-              {!enableSort && (
-                <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
-                  <i className="pi pi-info-circle mr-1"></i>
-                  Sorting disabled
-                </span>
-              )}
-              {!enableFilter && (
-                <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
-                  <i className="pi pi-info-circle mr-1"></i>
-                  Filtering disabled
-                </span>
-              )}
-              {!enableSummation && (
-                <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
-                  <i className="pi pi-info-circle mr-1"></i>
-                  Summation disabled
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Controls Row: Visibility Selector and Export button */}
-          <div className="mb-4 flex items-center justify-between gap-4 flex-wrap flex-shrink-0">
-            {/* Left side: Visibility Control and Lock button */}
-            <div className="flex-shrink-0 flex items-center gap-2">
-              {onVisibleColumnsChange && !isEmpty(availableColumnsForVisibility) && (
-                <IconOnlyMultiselectFilter
-                  value={visibleColumns}
-                  options={availableColumnsForVisibility.map(col => ({
-                    label: formatHeaderName(col),
-                    value: col,
-                  }))}
-                  onChange={onVisibleColumnsChange}
-                  placeholder="Visible Columns"
-                  fieldName="columns"
-                  itemLabel="Visible Column"
-                  icon="pi-eye"
-                />
-              )}
-              <button
-                onClick={() => setFreezeFirstColumn(!freezeFirstColumn)}
-                className={`p-2 rounded-lg transition-colors flex items-center justify-center ${freezeFirstColumn
-                    ? 'bg-blue-600 text-white hover:bg-blue-700'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                  }`}
-                title={freezeFirstColumn ? 'Unlock first column' : 'Lock first column'}
-              >
-                <i className={`pi ${freezeFirstColumn ? 'pi-lock' : 'pi-unlock'}`}></i>
-              </button>
-            </div>
-
-            {/* Right side: Export button */}
-            <div className="flex-shrink-0 flex items-center gap-2">
-              <button
-                onClick={exportToXLSX}
-                disabled={isEmpty(sortedData)}
-                className="p-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
-                title="Export to Excel"
-              >
-                <i className="pi pi-file-excel"></i>
-              </button>
-            </div>
-          </div>
-
-          {/* Filter Chips */}
-          {enableFilter && !isEmpty(activeFilters) && (
-            <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg flex-shrink-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-medium text-gray-600 mr-1">Active Filters:</span>
-                {activeFilters.map(({ column, formattedValue }) => (
-                  <div
-                    key={column}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-800 rounded-full text-xs font-medium"
-                  >
-                    <span>
-                      {formatHeaderName(column)}: {formattedValue}
-                    </span>
-                    <button
-                      onClick={() => clearFilter(column)}
-                      className="ml-1 hover:bg-blue-200 rounded-full p-0.5 transition-colors"
-                      title="Remove filter"
-                      type="button"
-                    >
-                      <i className="pi pi-times text-[10px]"></i>
-                    </button>
-                  </div>
-                ))}
-                <button
-                  onClick={clearAllFilters}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-100 text-red-700 rounded-full text-xs font-medium hover:bg-red-200 transition-colors"
-                  title="Clear all filters"
-                  type="button"
-                >
-                  <i className="pi pi-times-circle text-xs"></i>
-                  <span>Clear All</span>
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="border border-gray-200 rounded-lg w-full responsive-table-container flex-1" style={{ position: 'relative', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <DataTable
-              value={isArray(paginatedData) ? paginatedData : []}
-              scrollable={scrollable}
-              scrollHeight="flex"
-              sortMode={enableSort ? "multiple" : undefined}
-              removableSort={enableSort}
-              multiSortMeta={multiSortMeta}
-              onSort={(e) => {
-                setMultiSortMeta(e.multiSortMeta || []);
-                setFirst(0);
-              }}
-              showGridlines
-              stripedRows
-              className="p-datatable-sm w-full"
-              style={{ minWidth: '100%' }}
-              filterDisplay={enableFilter ? "row" : undefined}
-              expandedRows={expandedRows}
-              onRowToggle={(e) => setExpandedRows(e.data)}
-              rowExpansionTemplate={outerGroupField ? rowExpansionTemplate : undefined}
-              dataKey={outerGroupField ? "__groupKey__" : undefined}
-            >
-              {outerGroupField && (
-                <Column
-                  expander={allowExpansion}
-                  style={{ width: '3rem' }}
-                />
-              )}
-              {frozenCols.map((col, index) => {
-                const colType = get(columnTypes, col);
-                const isNumericCol = get(colType, 'isNumeric', false);
-                const isFirstColumn = index === 0;
-                return (
-                  <Column
-                    key={`frozen-${col}`}
-                    field={col}
-                    header={formatHeaderName(col)}
-                    sortable={enableSort}
-                    frozen={freezeFirstColumn}
-                    style={{
-                      minWidth: `${get(calculateColumnWidths, col, 120)}px`,
-                      width: `${get(calculateColumnWidths, col, 120)}px`,
-                      maxWidth: `${get(calculateColumnWidths, col, 200)}px`
-                    }}
-                    filter={enableFilter}
-                    filterElement={enableFilter ? getFilterElement(col) : undefined}
-                    showFilterMenu={false}
-                    showClearButton={false}
-                    footer={footerTemplate(col, isFirstColumn)}
-                    body={getBodyTemplate(col)}
-                    align={isNumericCol ? 'right' : 'left'}
-                  />
-                );
-              })}
-
-              {regularCols.map((col) => {
-                const colType = get(columnTypes, col);
-                const isNumericCol = get(colType, 'isNumeric', false);
-                return (
-                  <Column
-                    key={col}
-                    field={col}
-                    header={formatHeaderName(col)}
-                    sortable={enableSort}
-                    style={{
-                      minWidth: `${get(calculateColumnWidths, col, 120)}px`,
-                      width: `${get(calculateColumnWidths, col, 120)}px`,
-                      maxWidth: `${get(calculateColumnWidths, col, 400)}px`
-                    }}
-                    filter={enableFilter}
-                    filterElement={enableFilter ? getFilterElement(col) : undefined}
-                    showFilterMenu={false}
-                    showClearButton={false}
-                    footer={footerTemplate(col)}
-                    body={getBodyTemplate(col)}
-                    align={isNumericCol ? 'right' : 'left'}
-                  />
-                );
-              })}
-            </DataTable>
-          </div>
-
-          <div className="mt-4 flex-shrink-0">
-            <Paginator
-              first={first}
-              rows={rows}
-              totalRecords={sortedData.length}
-              rowsPerPageOptions={rowsPerPageOptions}
-              onPageChange={onPageChange}
-              template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink RowsPerPageDropdown"
-            />
-          </div>
+          <FeatureStatusIndicators className="flex-shrink-0" />
+          <TableControls showFullscreenButton={false} controlsRowClassName="flex-shrink-0" />
+          <FilterChips className="flex-shrink-0" />
+          <TableView 
+            scrollHeight="flex" 
+            containerClassName="flex-1" 
+            containerStyle={{ minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+          />
+          <PaginatorWrapper className="flex-shrink-0" />
         </div>
       </Dialog>
     </div>
