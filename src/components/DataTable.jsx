@@ -7,6 +7,8 @@ import { Column } from 'primereact/column';
 import { InputText } from 'primereact/inputtext';
 import { Calendar } from 'primereact/calendar';
 import { Paginator } from 'primereact/paginator';
+import { Dialog } from 'primereact/dialog';
+import { Button } from 'primereact/button';
 import * as XLSX from 'xlsx';
 import {
   isNil,
@@ -136,18 +138,18 @@ function formatDateValue(value) {
  */
 function parseNumericFilter(filterValue) {
   if (isNil(filterValue) || filterValue === '') return null;
-  
+
   const str = trim(String(filterValue));
-  
+
   // Number pattern that allows optional +/- with space: -10, - 10, +10, + 10, 10
   const numPattern = '([+-]?\\s*\\d+\\.?\\d*)';
-  
+
   // Helper to parse number with potential space after +/-
   const parseNum = (numStr) => {
     const cleaned = numStr.replace(/\s+/g, '');
     return toNumber(cleaned);
   };
-  
+
   // Range: "10 <> 20" or "10<>20" or "-10 <> 20" or "- 10 <> - 20"
   const rangeRegex = new RegExp(`^${numPattern}\\s*<>\\s*${numPattern}$`);
   const rangeMatch = str.match(rangeRegex);
@@ -158,7 +160,7 @@ function parseNumericFilter(filterValue) {
       return { type: 'range', min: Math.min(min, max), max: Math.max(min, max) };
     }
   }
-  
+
   // Less than or equal: "<=10" or "<= 10" or "<= -10" or "<= - 10"
   const lteRegex = new RegExp(`^<=\\s*${numPattern}$`);
   const lteMatch = str.match(lteRegex);
@@ -166,7 +168,7 @@ function parseNumericFilter(filterValue) {
     const num = parseNum(lteMatch[1]);
     if (!_isNaN(num)) return { type: 'lte', value: num };
   }
-  
+
   // Greater than or equal: ">=10" or ">= 10" or ">= -10"
   const gteRegex = new RegExp(`^>=\\s*${numPattern}$`);
   const gteMatch = str.match(gteRegex);
@@ -174,7 +176,7 @@ function parseNumericFilter(filterValue) {
     const num = parseNum(gteMatch[1]);
     if (!_isNaN(num)) return { type: 'gte', value: num };
   }
-  
+
   // Less than: "<10" or "< 10" or "< -10" or "< - 10"
   const ltRegex = new RegExp(`^<\\s*${numPattern}$`);
   const ltMatch = str.match(ltRegex);
@@ -182,7 +184,7 @@ function parseNumericFilter(filterValue) {
     const num = parseNum(ltMatch[1]);
     if (!_isNaN(num)) return { type: 'lt', value: num };
   }
-  
+
   // Greater than: ">10" or "> 10" or "> -10"
   const gtRegex = new RegExp(`^>\\s*${numPattern}$`);
   const gtMatch = str.match(gtRegex);
@@ -190,7 +192,7 @@ function parseNumericFilter(filterValue) {
     const num = parseNum(gtMatch[1]);
     if (!_isNaN(num)) return { type: 'gt', value: num };
   }
-  
+
   // Equals: "=10" or "= 10" or "= -10" or "= - 10"
   const eqRegex = new RegExp(`^=\\s*${numPattern}$`);
   const eqMatch = str.match(eqRegex);
@@ -198,7 +200,7 @@ function parseNumericFilter(filterValue) {
     const num = parseNum(eqMatch[1]);
     if (!_isNaN(num)) return { type: 'eq', value: num };
   }
-  
+
   // Plain number (treat as contains/text search for partial match)
   const plainNumRegex = new RegExp(`^${numPattern}$`);
   const plainMatch = str.match(plainNumRegex);
@@ -208,7 +210,7 @@ function parseNumericFilter(filterValue) {
       return { type: 'contains', value: str.replace(/\s+/g, '') };
     }
   }
-  
+
   // Not a valid numeric filter, treat as text
   return { type: 'text', value: str };
 }
@@ -218,9 +220,9 @@ function parseNumericFilter(filterValue) {
  */
 function applyNumericFilter(cellValue, parsedFilter) {
   if (!parsedFilter) return true;
-  
+
   const numCell = isNumber(cellValue) ? cellValue : toNumber(cellValue);
-  
+
   switch (parsedFilter.type) {
     case 'lt':
       return !_isNaN(numCell) && numCell < parsedFilter.value;
@@ -249,15 +251,15 @@ function applyNumericFilter(cellValue, parsedFilter) {
  */
 function applyDateFilter(cellValue, dateRange) {
   if (!dateRange || (!dateRange[0] && !dateRange[1])) return true;
-  
+
   const cellDate = parseToDate(cellValue);
   if (!cellDate) return false;
-  
+
   const [startDate, endDate] = dateRange;
-  
+
   // Normalize to start/end of day for comparison
   const cellTime = cellDate.getTime();
-  
+
   if (startDate && endDate) {
     const startTime = new Date(startDate).setHours(0, 0, 0, 0);
     const endTime = new Date(endDate).setHours(23, 59, 59, 999);
@@ -269,7 +271,7 @@ function applyDateFilter(cellValue, dateRange) {
     const endTime = new Date(endDate).setHours(23, 59, 59, 999);
     return cellTime <= endTime;
   }
-  
+
   return true;
 }
 
@@ -304,6 +306,255 @@ function CustomTriStateCheckbox({ value, onChange }) {
         <i className="pi pi-minus text-gray-400 text-xs" />
       )}
     </div>
+  );
+}
+
+function IconOnlyMultiselectFilter({ value, options, onChange, placeholder = "Select...", fieldName, itemLabel = "Filter", icon = "pi-list" }) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0, width: 0 });
+  const triggerRef = useRef(null);
+  const dropdownRef = useRef(null);
+  const selectedValues = value || [];
+  const [mounted, setMounted] = useState(false);
+
+  // Ensure portal target exists
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Calculate position before rendering to avoid flash
+  useLayoutEffect(() => {
+    if (!isOpen || !triggerRef.current) return;
+
+    const calculatePosition = () => {
+      if (!triggerRef.current) return;
+
+      const rect = triggerRef.current.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const dropdownWidth = 224; // w-56 = 14rem = 224px
+      const dropdownHeight = 300; // Approximate max height
+      const gap = 4; // mt-1 = 4px
+
+      let left = rect.left;
+      let top = rect.bottom + gap;
+
+      // Adjust horizontal position if dropdown would overflow right
+      if (left + dropdownWidth > viewportWidth) {
+        left = Math.max(8, viewportWidth - dropdownWidth - 8);
+      }
+
+      // Adjust horizontal position if dropdown would overflow left
+      if (left < 8) {
+        left = 8;
+      }
+
+      // Adjust vertical position if dropdown would overflow bottom
+      if (top + dropdownHeight > viewportHeight) {
+        // Try to show above the trigger
+        const spaceAbove = rect.top;
+        if (spaceAbove > dropdownHeight) {
+          top = rect.top - dropdownHeight - gap;
+        } else {
+          // Not enough space above, position at bottom of viewport
+          top = viewportHeight - dropdownHeight - 8;
+        }
+      }
+
+      setPosition({
+        top,
+        left,
+        width: Math.max(rect.width, dropdownWidth)
+      });
+    };
+
+    calculatePosition();
+
+    // Update position on scroll and resize
+    const updatePosition = debounce(calculatePosition, 10);
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [isOpen]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleClickOutside = (event) => {
+      if (
+        triggerRef.current &&
+        !triggerRef.current.contains(event.target) &&
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target)
+      ) {
+        setIsOpen(false);
+      }
+    };
+
+    // Use capture phase to catch clicks before they bubble
+    document.addEventListener('mousedown', handleClickOutside, true);
+    return () => document.removeEventListener('mousedown', handleClickOutside, true);
+  }, [isOpen]);
+
+  const filteredOptions = useMemo(() => {
+    if (!searchTerm) return options;
+    const term = toLower(searchTerm);
+    return filter(options, opt => includes(toLower(String(opt.label)), term));
+  }, [options, searchTerm]);
+
+  const toggleValue = (val) => {
+    if (includes(selectedValues, val)) {
+      onChange(filter(selectedValues, v => v !== val));
+    } else {
+      onChange([...selectedValues, val]);
+    }
+  };
+
+  const clearAll = () => {
+    onChange([]);
+    setSearchTerm('');
+  };
+
+  const selectAll = () => {
+    onChange(options.map(o => o.value));
+  };
+
+  const selectedCount = selectedValues.length;
+  const hasSelection = !isEmpty(selectedValues);
+
+  const dropdownContent = isOpen && mounted ? (
+    <div
+      ref={dropdownRef}
+      className="fixed z-[9999] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden"
+      style={{
+        top: `${position.top}px`,
+        left: `${position.left}px`,
+        width: `${position.width}px`,
+        minWidth: '200px',
+        maxWidth: '400px'
+      }}
+    >
+      {/* Search Input */}
+      <div className="p-2 border-b border-gray-100">
+        <div className="relative">
+          <i className="pi pi-search absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-[10px]"></i>
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search..."
+            className="w-full pl-7 pr-7 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+            autoFocus
+            onClick={(e) => e.stopPropagation()}
+          />
+          {searchTerm && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setSearchTerm(''); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              <i className="pi pi-times text-[10px]"></i>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Quick Actions */}
+      <div className="px-2 py-1 border-b border-gray-100 flex gap-2 text-[10px]">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); selectAll(); }}
+          className="text-blue-600 hover:text-blue-800 transition-colors"
+        >
+          All
+        </button>
+        <span className="text-gray-300">|</span>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); clearAll(); }}
+          className="text-gray-500 hover:text-red-600 transition-colors"
+        >
+          Clear
+        </button>
+        {!isEmpty(selectedValues) && (
+          <>
+            <span className="text-gray-300">|</span>
+            <span className="text-gray-500">{selectedValues.length} selected</span>
+          </>
+        )}
+      </div>
+
+      {/* Options List */}
+      <div className="max-h-40 overflow-y-auto">
+        {isEmpty(filteredOptions) ? (
+          <div className="px-3 py-3 text-center text-xs text-gray-500">
+            No matches
+          </div>
+        ) : (
+          filteredOptions.map(opt => {
+            const isSelected = includes(selectedValues, opt.value);
+            return (
+              <label
+                key={opt.value}
+                className={`flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors text-xs ${isSelected ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'
+                  }`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleValue(opt.value)}
+                  className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <span className={`truncate ${isSelected ? 'text-blue-900 font-medium' : 'text-gray-700'}`}>
+                  {opt.label}
+                </span>
+              </label>
+            );
+          })
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="px-3 py-2 bg-gray-50 border-t border-gray-100 text-xs text-gray-500">
+        Total {fieldName || 'fields'}: {options.length}
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <div className="icon-only-multiselect-container relative">
+        {/* Icon-only Trigger Button with Badge */}
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className={`relative p-2 rounded-lg transition-colors flex items-center justify-center ${
+            hasSelection
+              ? 'bg-blue-600 text-white hover:bg-blue-700'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+          title={hasSelection ? `${selectedCount} ${itemLabel}${selectedCount !== 1 ? 's' : ''} selected` : placeholder}
+        >
+          <i className={`pi ${icon} text-base`}></i>
+          {hasSelection && (
+            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center leading-none">
+              {selectedCount > 99 ? '99+' : selectedCount}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Portal dropdown */}
+      {mounted && createPortal(dropdownContent, document.body)}
+    </>
   );
 }
 
@@ -497,9 +748,8 @@ function MultiselectFilter({ value, options, onChange, placeholder = "Select..."
             return (
               <label
                 key={opt.value}
-                className={`flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors text-xs ${
-                  isSelected ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'
-                }`}
+                className={`flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors text-xs ${isSelected ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'
+                  }`}
                 onClick={(e) => e.stopPropagation()}
               >
                 <input
@@ -532,9 +782,8 @@ function MultiselectFilter({ value, options, onChange, placeholder = "Select..."
           ref={triggerRef}
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className={`w-full flex items-center justify-between px-2 py-1.5 text-xs border rounded bg-white hover:border-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
-            isEmpty(selectedValues) ? 'border-gray-300 text-gray-500' : 'border-blue-400 text-blue-700 bg-blue-50'
-          }`}
+          className={`w-full flex items-center justify-between px-2 py-1.5 text-xs border rounded bg-white hover:border-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${isEmpty(selectedValues) ? 'border-gray-300 text-gray-500' : 'border-blue-400 text-blue-700 bg-blue-50'
+            }`}
         >
           <span className="truncate">
             {isEmpty(selectedValues) ? placeholder : `${selectedValues.length} ${itemLabel}${selectedValues.length !== 1 ? 's' : ''}`}
@@ -615,6 +864,19 @@ export default function DataTableComponent({
   const [multiSortMeta, setMultiSortMeta] = useState([]);
   const [expandedRows, setExpandedRows] = useState(null);
   const [freezeFirstColumn, setFreezeFirstColumn] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Prevent body scroll when dialog is open
+  useEffect(() => {
+    if (isFullscreen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isFullscreen]);
 
   useEffect(() => {
     setRows(defaultRows);
@@ -652,7 +914,7 @@ export default function DataTableComponent({
 
   const columns = useMemo(() => {
     if (isEmpty(safeData)) return [];
-    const allKeys = uniq(flatMap(safeData, (item) => 
+    const allKeys = uniq(flatMap(safeData, (item) =>
       item && typeof item === 'object' ? keys(item) : []
     ));
     return allKeys;
@@ -700,18 +962,18 @@ export default function DataTableComponent({
       // Infer boolean from 0/1 if all non-null values are binary
       const isBinaryBooleanColumn = nonNullCount > 0 && binaryCount === nonNullCount && binaryCount >= 1;
       const isBooleanColumn = isTrueBooleanColumn || isBinaryBooleanColumn;
-      
+
       // Date detection: at least 70% should be date-like
       const isDateColumn = !isBooleanColumn && nonNullCount > 0 && dateCount > nonNullCount * 0.7;
-      
+
       // Numeric detection: at least 80% should be numeric (excluding dates and booleans)
       const isNumericColumn = !isBooleanColumn && !isDateColumn && nonNullCount > 0 && numericCount > nonNullCount * 0.8;
 
-      types[col] = { 
+      types[col] = {
         isBoolean: isBooleanColumn,
         isBinaryBoolean: isBinaryBooleanColumn,
-        isNumeric: isNumericColumn, 
-        isDate: isDateColumn 
+        isNumeric: isNumericColumn,
+        isDate: isDateColumn
       };
     });
 
@@ -721,9 +983,9 @@ export default function DataTableComponent({
 
   const orderedColumns = useMemo(() => {
     if (isEmpty(columns)) return [];
-    
+
     let filteredColumns = columns;
-    
+
     // When grouping is active, show only numeric columns, but always include outer group field
     // Inner group field is hidden in main table (only shown in nested table)
     if (outerGroupField) {
@@ -741,7 +1003,7 @@ export default function DataTableComponent({
         return get(colType, 'isNumeric', false);
       });
     }
-    
+
     // Apply visibleColumns filter if provided (and not empty)
     if (!isEmpty(visibleColumns) && isArray(visibleColumns)) {
       const visibleSet = new Set(visibleColumns);
@@ -757,7 +1019,7 @@ export default function DataTableComponent({
         return visibleSet.has(col);
       });
     }
-    
+
     // Reorder: outerGroupField first, then rest (innerGroupField is excluded)
     if (outerGroupField) {
       const otherColumns = filteredColumns.filter(
@@ -769,7 +1031,7 @@ export default function DataTableComponent({
       }
       return [...ordered, ...otherColumns];
     }
-    
+
     return filteredColumns;
   }, [columns, visibleColumns, outerGroupField, innerGroupField, columnTypes]);
 
@@ -777,7 +1039,7 @@ export default function DataTableComponent({
     () => isEmpty(orderedColumns) ? [] : [head(orderedColumns)],
     [orderedColumns]
   );
-  
+
   const regularCols = useMemo(
     () => tail(orderedColumns),
     [orderedColumns]
@@ -790,7 +1052,7 @@ export default function DataTableComponent({
   // Compute available columns for visibility selector based on mode
   const availableColumnsForVisibility = useMemo(() => {
     if (isEmpty(columns)) return [];
-    
+
     // When both outerGroupField and innerGroupField are set, show only numeric columns (plus group fields)
     if (outerGroupField && innerGroupField) {
       return columns.filter(col => {
@@ -803,19 +1065,19 @@ export default function DataTableComponent({
         return get(colType, 'isNumeric', false);
       });
     }
-    
+
     // Default: show all columns
     return columns;
   }, [columns, outerGroupField, innerGroupField, columnTypes]);
 
   const formatCellValue = useCallback((value, colType) => {
     if (isNil(value)) return '';
-    
+
     // Format dates
     if (colType?.isDate) {
       return formatDateValue(value);
     }
-    
+
     if (isNumber(value)) {
       return value % 1 === 0
         ? value.toLocaleString('en-US')
@@ -966,7 +1228,7 @@ export default function DataTableComponent({
       return every(columns, (col) => {
         const filterObj = get(filters, col);
         if (!filterObj || isNil(filterObj.value) || filterObj.value === '') return true;
-        
+
         // Handle empty arrays for multiselect
         if (isArray(filterObj.value) && isEmpty(filterObj.value)) return true;
 
@@ -984,7 +1246,7 @@ export default function DataTableComponent({
         if (get(colType, 'isBoolean')) {
           const cellIsTruthy = cellValue === true || cellValue === 1 || cellValue === '1';
           const cellIsFalsy = cellValue === false || cellValue === 0 || cellValue === '0';
-          
+
           if (filterValue === true) {
             return cellIsTruthy;
           } else if (filterValue === false) {
@@ -1021,7 +1283,7 @@ export default function DataTableComponent({
     filteredData.forEach((row) => {
       // Skip group rows
       if (row.__isGroupRow__) return;
-      
+
       const groupKey = get(row, outerGroupField);
       const key = isNil(groupKey) ? '__null__' : String(groupKey);
       if (!groups[key]) {
@@ -1049,14 +1311,14 @@ export default function DataTableComponent({
         // Aggregate each inner group
         innerData = Object.entries(innerGroups).map(([innerKey, innerRows]) => {
           const aggregated = {};
-          
+
           // Get all columns from the first row
           const firstRow = innerRows[0];
           if (!firstRow) return null;
 
           columns.forEach((col) => {
             const colType = get(columnTypes, col, {});
-            
+
             // For the inner group field, use the group value
             if (col === innerGroupField) {
               aggregated[col] = innerKey === '__null__' ? null : innerKey;
@@ -1109,7 +1371,7 @@ export default function DataTableComponent({
 
     const fields = multiSortMeta.map(s => s.field);
     const orders = multiSortMeta.map(s => s.order === 1 ? 'asc' : 'desc');
-    
+
     return orderBy(dataForSorting, fields, orders);
   }, [dataForSorting, multiSortMeta]);
 
@@ -1123,12 +1385,12 @@ export default function DataTableComponent({
       const colType = get(columnTypes, col);
       // Skip date columns for summation
       if (get(colType, 'isDate')) return;
-      
+
       const values = filter(
         dataForSums.map((row) => get(row, col)),
         (val) => !isNil(val)
       );
-      
+
       if (!isEmpty(values) && isNumericValue(head(values))) {
         sums[col] = sumBy(values, (val) => {
           const numVal = isNumber(val) ? val : toNumber(val);
@@ -1146,9 +1408,9 @@ export default function DataTableComponent({
 
   const footerTemplate = (column, isFirstColumn = false) => {
     if (!enableSummation) return null;
-    
+
     const colType = get(columnTypes, column);
-    
+
     // No summation for date columns
     if (get(colType, 'isDate')) {
       return isFirstColumn ? (
@@ -1157,15 +1419,15 @@ export default function DataTableComponent({
         </div>
       ) : null;
     }
-    
+
     const sum = get(calculateSums, column);
     const hasSum = !isNil(sum) && !get(colType, 'isBoolean');
-    
+
     // Determine color based on field lists
     const isRedField = includes(redFields, column);
     const isGreenField = includes(greenFields, column);
     const colorClass = isRedField ? 'text-red-600' : isGreenField ? 'text-green-600' : '';
-    
+
     if (isFirstColumn) {
       if (hasSum) {
         const formattedSum = sum % 1 === 0
@@ -1183,10 +1445,10 @@ export default function DataTableComponent({
         </div>
       );
     }
-    
+
     if (get(colType, 'isBoolean')) return null;
     if (isNil(sum)) return null;
-    
+
     const formattedSum = sum % 1 === 0
       ? sum.toLocaleString('en-US')
       : sum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1303,7 +1565,7 @@ export default function DataTableComponent({
   // Get active filters for display
   const activeFilters = useMemo(() => {
     if (!enableFilter || isEmpty(filters)) return [];
-    
+
     const active = [];
     columns.forEach((col) => {
       const filterObj = get(filters, col);
@@ -1384,7 +1646,7 @@ export default function DataTableComponent({
     const filterState = get(filters, col);
     const value = get(filterState, 'value', null);
     const columnOptions = get(optionColumnValues, col, []);
-    
+
     return (
       <MultiselectFilter
         value={value}
@@ -1469,8 +1731,8 @@ export default function DataTableComponent({
     return (
       <div className="p-3 bg-gray-50">
         <div className="text-xs font-semibold text-gray-700 mb-2">
-          {innerGroupField 
-            ? `Aggregated by ${formatHeaderName(innerGroupField)}` 
+          {innerGroupField
+            ? `Aggregated by ${formatHeaderName(innerGroupField)}`
             : `${nestedData.length} row${nestedData.length !== 1 ? 's' : ''}`}
         </div>
         <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -1581,45 +1843,50 @@ export default function DataTableComponent({
 
       {/* Controls Row: Visibility Selector and Export button */}
       <div className="mb-4 flex items-center justify-between gap-4 flex-wrap">
-        {/* Visibility Control */}
-        {onVisibleColumnsChange && !isEmpty(availableColumnsForVisibility) && (
-          <div className="flex-1 min-w-[200px] max-w-md">
-            <MultiselectFilter
+        {/* Left side: Visibility Control and Lock button */}
+        <div className="flex-shrink-0 flex items-center gap-2">
+          {onVisibleColumnsChange && !isEmpty(availableColumnsForVisibility) && (
+            <IconOnlyMultiselectFilter
               value={visibleColumns}
               options={availableColumnsForVisibility.map(col => ({
                 label: formatHeaderName(col),
                 value: col,
               }))}
               onChange={onVisibleColumnsChange}
-              placeholder={`Visible Columns${outerGroupField && innerGroupField ? ' (numeric only)' : ''}`}
+              placeholder="Visible Columns"
               fieldName="columns"
               itemLabel="Visible Column"
+              icon="pi-eye"
             />
-          </div>
-        )}
-        
-        {/* Export and Freeze buttons */}
-        <div className="flex-shrink-0 flex items-center gap-2">
+          )}
           <button
             onClick={() => setFreezeFirstColumn(!freezeFirstColumn)}
-            className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
-              freezeFirstColumn
+            className={`p-2 rounded-lg transition-colors flex items-center justify-center ${freezeFirstColumn
                 ? 'bg-blue-600 text-white hover:bg-blue-700'
                 : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-            }`}
+              }`}
             title={freezeFirstColumn ? 'Unlock first column' : 'Lock first column'}
           >
             <i className={`pi ${freezeFirstColumn ? 'pi-lock' : 'pi-unlock'}`}></i>
-            <span>{freezeFirstColumn ? 'Unlock Column' : 'Lock Column'}</span>
+          </button>
+        </div>
+
+        {/* Right side: Fullscreen and Export buttons */}
+        <div className="flex-shrink-0 flex items-center gap-2">
+          <button
+            onClick={() => setIsFullscreen(true)}
+            className="p-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center"
+            title="View table in fullscreen"
+          >
+            <i className="pi pi-window-maximize"></i>
           </button>
           <button
             onClick={exportToXLSX}
             disabled={isEmpty(sortedData)}
-            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+            className="p-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
             title="Export to Excel"
           >
             <i className="pi pi-file-excel"></i>
-            <span>Export XLSX</span>
           </button>
         </div>
       </div>
@@ -1752,6 +2019,214 @@ export default function DataTableComponent({
           template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink RowsPerPageDropdown"
         />
       </div>
+
+      {/* Fullscreen Dialog */}
+      <Dialog
+        visible={isFullscreen}
+        maximizable
+        modal
+        style={{ width: '70vw', height: '90vh' }}
+        contentStyle={{ padding: '1.5rem', overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%', maxHeight: '100%' }}
+        onHide={() => setIsFullscreen(false)}
+      >
+        <div className="w-full h-full flex flex-col" style={{ height: '100%', maxHeight: '100%', minHeight: 0, overflow: 'hidden' }}>
+          {/* Feature Status Indicators */}
+          {(!enableSort || !enableFilter || !enableSummation) && (
+            <div className="mb-3 flex flex-wrap gap-2 text-xs flex-shrink-0">
+              {!enableSort && (
+                <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
+                  <i className="pi pi-info-circle mr-1"></i>
+                  Sorting disabled
+                </span>
+              )}
+              {!enableFilter && (
+                <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
+                  <i className="pi pi-info-circle mr-1"></i>
+                  Filtering disabled
+                </span>
+              )}
+              {!enableSummation && (
+                <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md">
+                  <i className="pi pi-info-circle mr-1"></i>
+                  Summation disabled
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Controls Row: Visibility Selector and Export button */}
+          <div className="mb-4 flex items-center justify-between gap-4 flex-wrap flex-shrink-0">
+            {/* Left side: Visibility Control and Lock button */}
+            <div className="flex-shrink-0 flex items-center gap-2">
+              {onVisibleColumnsChange && !isEmpty(availableColumnsForVisibility) && (
+                <IconOnlyMultiselectFilter
+                  value={visibleColumns}
+                  options={availableColumnsForVisibility.map(col => ({
+                    label: formatHeaderName(col),
+                    value: col,
+                  }))}
+                  onChange={onVisibleColumnsChange}
+                  placeholder="Visible Columns"
+                  fieldName="columns"
+                  itemLabel="Visible Column"
+                  icon="pi-eye"
+                />
+              )}
+              <button
+                onClick={() => setFreezeFirstColumn(!freezeFirstColumn)}
+                className={`p-2 rounded-lg transition-colors flex items-center justify-center ${freezeFirstColumn
+                    ? 'bg-blue-600 text-white hover:bg-blue-700'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  }`}
+                title={freezeFirstColumn ? 'Unlock first column' : 'Lock first column'}
+              >
+                <i className={`pi ${freezeFirstColumn ? 'pi-lock' : 'pi-unlock'}`}></i>
+              </button>
+            </div>
+
+            {/* Right side: Export button */}
+            <div className="flex-shrink-0 flex items-center gap-2">
+              <button
+                onClick={exportToXLSX}
+                disabled={isEmpty(sortedData)}
+                className="p-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+                title="Export to Excel"
+              >
+                <i className="pi pi-file-excel"></i>
+              </button>
+            </div>
+          </div>
+
+          {/* Filter Chips */}
+          {enableFilter && !isEmpty(activeFilters) && (
+            <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg flex-shrink-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-medium text-gray-600 mr-1">Active Filters:</span>
+                {activeFilters.map(({ column, formattedValue }) => (
+                  <div
+                    key={column}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-800 rounded-full text-xs font-medium"
+                  >
+                    <span>
+                      {formatHeaderName(column)}: {formattedValue}
+                    </span>
+                    <button
+                      onClick={() => clearFilter(column)}
+                      className="ml-1 hover:bg-blue-200 rounded-full p-0.5 transition-colors"
+                      title="Remove filter"
+                      type="button"
+                    >
+                      <i className="pi pi-times text-[10px]"></i>
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={clearAllFilters}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-100 text-red-700 rounded-full text-xs font-medium hover:bg-red-200 transition-colors"
+                  title="Clear all filters"
+                  type="button"
+                >
+                  <i className="pi pi-times-circle text-xs"></i>
+                  <span>Clear All</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="border border-gray-200 rounded-lg w-full responsive-table-container flex-1" style={{ position: 'relative', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <DataTable
+              value={isArray(paginatedData) ? paginatedData : []}
+              scrollable={scrollable}
+              scrollHeight="flex"
+              sortMode={enableSort ? "multiple" : undefined}
+              removableSort={enableSort}
+              multiSortMeta={multiSortMeta}
+              onSort={(e) => {
+                setMultiSortMeta(e.multiSortMeta || []);
+                setFirst(0);
+              }}
+              showGridlines
+              stripedRows
+              className="p-datatable-sm w-full"
+              style={{ minWidth: '100%' }}
+              filterDisplay={enableFilter ? "row" : undefined}
+              expandedRows={expandedRows}
+              onRowToggle={(e) => setExpandedRows(e.data)}
+              rowExpansionTemplate={outerGroupField ? rowExpansionTemplate : undefined}
+              dataKey={outerGroupField ? "__groupKey__" : undefined}
+            >
+              {outerGroupField && (
+                <Column
+                  expander={allowExpansion}
+                  style={{ width: '3rem' }}
+                />
+              )}
+              {frozenCols.map((col, index) => {
+                const colType = get(columnTypes, col);
+                const isNumericCol = get(colType, 'isNumeric', false);
+                const isFirstColumn = index === 0;
+                return (
+                  <Column
+                    key={`frozen-${col}`}
+                    field={col}
+                    header={formatHeaderName(col)}
+                    sortable={enableSort}
+                    frozen={freezeFirstColumn}
+                    style={{
+                      minWidth: `${get(calculateColumnWidths, col, 120)}px`,
+                      width: `${get(calculateColumnWidths, col, 120)}px`,
+                      maxWidth: `${get(calculateColumnWidths, col, 200)}px`
+                    }}
+                    filter={enableFilter}
+                    filterElement={enableFilter ? getFilterElement(col) : undefined}
+                    showFilterMenu={false}
+                    showClearButton={false}
+                    footer={footerTemplate(col, isFirstColumn)}
+                    body={getBodyTemplate(col)}
+                    align={isNumericCol ? 'right' : 'left'}
+                  />
+                );
+              })}
+
+              {regularCols.map((col) => {
+                const colType = get(columnTypes, col);
+                const isNumericCol = get(colType, 'isNumeric', false);
+                return (
+                  <Column
+                    key={col}
+                    field={col}
+                    header={formatHeaderName(col)}
+                    sortable={enableSort}
+                    style={{
+                      minWidth: `${get(calculateColumnWidths, col, 120)}px`,
+                      width: `${get(calculateColumnWidths, col, 120)}px`,
+                      maxWidth: `${get(calculateColumnWidths, col, 400)}px`
+                    }}
+                    filter={enableFilter}
+                    filterElement={enableFilter ? getFilterElement(col) : undefined}
+                    showFilterMenu={false}
+                    showClearButton={false}
+                    footer={footerTemplate(col)}
+                    body={getBodyTemplate(col)}
+                    align={isNumericCol ? 'right' : 'left'}
+                  />
+                );
+              })}
+            </DataTable>
+          </div>
+
+          <div className="mt-4 flex-shrink-0">
+            <Paginator
+              first={first}
+              rows={rows}
+              totalRecords={sortedData.length}
+              rowsPerPageOptions={rowsPerPageOptions}
+              onPageChange={onPageChange}
+              template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink RowsPerPageDropdown"
+            />
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 }
