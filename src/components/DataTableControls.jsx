@@ -334,6 +334,7 @@ export default function DataTableControls({
   enableSort,
   enableFilter,
   enableSummation,
+  enableCellEdit = false,
   rowsPerPageOptions,
   defaultRows,
   columns = [],
@@ -343,9 +344,17 @@ export default function DataTableControls({
   greenFields = [],
   outerGroupField = null,
   innerGroupField = null,
+  nonEditableColumns = [], // Fields that should not be editable
+  enableTargetData = false,
+  targetColumns = [], // Fields from target data
+  targetOuterGroupField = null,
+  targetInnerGroupField = null,
+  targetValueField = null, // Field in target data containing target value
+  actualValueField = null, // Field in data containing actual value to compare
   onSortChange,
   onFilterChange,
   onSummationChange,
+  onCellEditChange,
   onRowsPerPageOptionsChange,
   onDefaultRowsChange,
   onTextFilterColumnsChange,
@@ -354,6 +363,12 @@ export default function DataTableControls({
   onGreenFieldsChange,
   onOuterGroupFieldChange,
   onInnerGroupFieldChange,
+  onNonEditableColumnsChange,
+  onEnableTargetDataChange,
+  onTargetOuterGroupFieldChange,
+  onTargetInnerGroupFieldChange,
+  onTargetValueFieldChange,
+  onActualValueFieldChange,
 }) {
   const [isExpanded, setIsExpanded] = React.useState(true);
   const [customOptions, setCustomOptions] = React.useState(
@@ -448,7 +463,7 @@ export default function DataTableControls({
         <div className="space-y-4 pt-4 border-t border-gray-200">
           <div>
             <h4 className="text-xs font-medium text-gray-700 mb-3">Features</h4>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <label className={`flex items-center justify-between p-3 rounded-lg border transition-all cursor-pointer ${enableSort
                 ? 'bg-blue-50 border-blue-200 hover:border-blue-300'
                 : 'bg-white border-gray-200 hover:border-gray-300'
@@ -538,6 +553,38 @@ export default function DataTableControls({
                   </div>
                 </div>
               </label>
+
+              {onCellEditChange && (
+                <label className={`flex items-center justify-between p-3 rounded-lg border transition-all cursor-pointer ${enableCellEdit
+                  ? 'bg-blue-50 border-blue-200 hover:border-blue-300'
+                  : 'bg-white border-gray-200 hover:border-gray-300'
+                  }`}>
+                  <div className="flex items-center gap-2">
+                    <i className={`pi pi-pencil ${enableCellEdit ? 'text-blue-600' : 'text-gray-600'}`}></i>
+                    <span className={`text-sm font-medium ${enableCellEdit ? 'text-blue-900' : 'text-gray-700'}`}>
+                      Cell Editing
+                    </span>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      checked={enableCellEdit}
+                      onChange={(e) => onCellEditChange(e.target.checked)}
+                      className="sr-only"
+                    />
+                    <div
+                      className={`w-11 h-6 rounded-full transition-colors duration-200 ${enableCellEdit ? 'bg-blue-600' : 'bg-gray-300'
+                        }`}
+                    >
+                      <div
+                        className={`w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-200 ${enableCellEdit ? 'translate-x-5' : 'translate-x-0.5'
+                          }`}
+                        style={{ marginTop: '2px' }}
+                      ></div>
+                    </div>
+                  </div>
+                </label>
+              )}
             </div>
           </div>
 
@@ -617,6 +664,130 @@ export default function DataTableControls({
                   />
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Target Data Configuration */}
+          {outerGroupField && innerGroupField && !isEmpty(targetColumns) && (
+            <div className="space-y-3">
+              <h4 className="text-xs font-medium text-gray-700 mb-2 flex items-center gap-2">
+                <i className="pi pi-bullseye text-gray-500"></i>
+                Target Data
+              </h4>
+              <p className="text-xs text-gray-500 mb-3">
+                Enable target data to compare actual values with targets and compute percentages. Only available when both Outer Group and Inner Group are configured.
+              </p>
+              
+              <div className="space-y-3">
+                <label className={`flex items-center justify-between p-3 rounded-lg border transition-all cursor-pointer ${enableTargetData
+                  ? 'bg-blue-50 border-blue-200 hover:border-blue-300'
+                  : 'bg-white border-gray-200 hover:border-gray-300'
+                  }`}>
+                  <div className="flex items-center gap-2">
+                    <i className={`pi pi-bullseye ${enableTargetData ? 'text-blue-600' : 'text-gray-600'}`}></i>
+                    <span className={`text-sm font-medium ${enableTargetData ? 'text-blue-900' : 'text-gray-700'}`}>
+                      Enable Target Data
+                    </span>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      checked={enableTargetData}
+                      onChange={(e) => onEnableTargetDataChange && onEnableTargetDataChange(e.target.checked)}
+                      className="sr-only"
+                    />
+                    <div
+                      className={`w-11 h-6 rounded-full transition-colors duration-200 ${enableTargetData ? 'bg-blue-600' : 'bg-gray-300'
+                        }`}
+                    >
+                      <div
+                        className={`w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-200 ${enableTargetData ? 'translate-x-5' : 'translate-x-0.5'
+                          }`}
+                        style={{ marginTop: '2px' }}
+                      ></div>
+                    </div>
+                  </div>
+                </label>
+
+                {enableTargetData && (
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 border-t border-gray-200">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                        Target Outer Group Field
+                      </label>
+                      <p className="text-xs text-gray-500 mb-1">(from Target Data)</p>
+                      <SingleFieldSelector
+                        columns={targetColumns}
+                        selectedField={targetOuterGroupField}
+                        onSelectionChange={onTargetOuterGroupFieldChange}
+                        formatFieldName={formatFieldName}
+                        placeholder="Map to Outer Group..."
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                        Target Inner Group Field
+                      </label>
+                      <p className="text-xs text-gray-500 mb-1">(from Target Data)</p>
+                      <SingleFieldSelector
+                        columns={targetColumns}
+                        selectedField={targetInnerGroupField}
+                        onSelectionChange={onTargetInnerGroupFieldChange}
+                        formatFieldName={formatFieldName}
+                        placeholder="Map to Inner Group..."
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                        Target Value Field
+                      </label>
+                      <p className="text-xs text-gray-500 mb-1">(from Target Data)</p>
+                      <SingleFieldSelector
+                        columns={targetColumns}
+                        selectedField={targetValueField}
+                        onSelectionChange={onTargetValueFieldChange}
+                        formatFieldName={formatFieldName}
+                        placeholder="Select target value field..."
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                        Actual Value Field
+                      </label>
+                      <p className="text-xs text-gray-500 mb-1">(from Data)</p>
+                      <SingleFieldSelector
+                        columns={columns}
+                        selectedField={actualValueField}
+                        onSelectionChange={onActualValueFieldChange}
+                        formatFieldName={formatFieldName}
+                        placeholder="Select actual value field..."
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Non-Editable Columns */}
+          {enableCellEdit && !isEmpty(columns) && onNonEditableColumnsChange && (
+            <div>
+              <h4 className="text-xs font-medium text-gray-700 mb-2 flex items-center gap-2">
+                <i className="pi pi-lock text-gray-500"></i>
+                Non-Editable Columns
+              </h4>
+              <p className="text-xs text-gray-500 mb-3">
+                Select fields that should not be editable. Note: Editing is automatically disabled when Outer Group or Inner Group is active.
+              </p>
+              <FieldPicker
+                columns={columns}
+                selectedFields={nonEditableColumns}
+                onSelectionChange={onNonEditableColumnsChange}
+                formatFieldName={formatFieldName}
+              />
             </div>
           )}
 

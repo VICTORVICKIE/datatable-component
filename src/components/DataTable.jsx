@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { InputText } from 'primereact/inputtext';
+import { InputNumber } from 'primereact/inputnumber';
 import { Calendar } from 'primereact/calendar';
 import { Paginator } from 'primereact/paginator';
 import { Dialog } from 'primereact/dialog';
@@ -536,11 +537,10 @@ function IconOnlyMultiselectFilter({ value, options, onChange, placeholder = "Se
           ref={triggerRef}
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className={`relative p-2 rounded-lg transition-colors flex items-center justify-center ${
-            hasSelection
-              ? 'bg-blue-600 text-white hover:bg-blue-700'
-              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-          }`}
+          className={`relative p-2 rounded-lg transition-colors flex items-center justify-center ${hasSelection
+            ? 'bg-blue-600 text-white hover:bg-blue-700'
+            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
           title={hasSelection ? `${selectedCount} ${itemLabel}${selectedCount !== 1 ? 's' : ''} selected` : placeholder}
         >
           <i className={`pi ${icon} text-base`}></i>
@@ -788,7 +788,7 @@ function MultiselectFilter({ value, options, onChange, placeholder = "Select..."
           <span className="truncate">
             {isEmpty(selectedValues) ? placeholder : `${selectedValues.length} ${itemLabel}${selectedValues.length !== 1 ? 's' : ''}`}
           </span>
-          <i className={`pi ${isOpen ? 'pi-chevron-up' : 'pi-chevron-down'} text-[10px] ml-1 flex-shrink-0`}></i>
+          <i className={`pi ${isOpen ? 'pi-chevron-up' : 'pi-chevron-down'} text-[10px] ml-1 shrink-0`}></i>
         </button>
       </div>
 
@@ -840,6 +840,11 @@ function DateRangeFilter({ value, onChange }) {
   );
 }
 
+// Special column names for target data columns
+const TARGET_PERCENTAGE_COL = '__target_percentage__';
+const TARGET_TARGET_COL = '__target_target__';
+const TARGET_ACTUAL_COL = '__target_actual__';
+
 export default function DataTableComponent({
   data,
   rowsPerPageOptions = [10, 25, 50, 100],
@@ -856,6 +861,17 @@ export default function DataTableComponent({
   greenFields = [],
   outerGroupField = null, // Field to group by for row expansion
   innerGroupField = null, // Field to aggregate by within each outer group
+  onOuterGroupClick, // Callback when outer group cell is clicked: (rowData, column, value) => void
+  onInnerGroupClick, // Callback when inner group cell is clicked: (rowData, column, value) => void
+  enableCellEdit = false, // Enable cell editing
+  onCellEditComplete, // Callback when cell edit is complete: (e) => void, where e = { rowData, newValue, field, originalEvent, oldValue }
+  isCellEditable, // Function to determine if a cell is editable: (rowData, field) => boolean
+  nonEditableColumns = [], // Array of column names that should not be editable
+  targetData = null, // Target data array for comparison
+  targetOuterGroupField = null, // Field in target data that maps to outerGroupField
+  targetInnerGroupField = null, // Field in target data that maps to innerGroupField
+  targetValueField = null, // Field in target data that contains the target value
+  actualValueField = null, // Field in data that contains the actual value to compare
 }) {
   const [first, setFirst] = useState(0);
   const [rows, setRows] = useState(defaultRows);
@@ -865,6 +881,8 @@ export default function DataTableComponent({
   const [expandedRows, setExpandedRows] = useState(null);
   const [freezeFirstColumn, setFreezeFirstColumn] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const dialogRef = useRef(null);
 
   // Prevent body scroll when dialog is open
   useEffect(() => {
@@ -980,6 +998,33 @@ export default function DataTableComponent({
     return types;
   }, [safeData, columns, isNumericValue]);
 
+  // Create target lookup map when target data is enabled
+  const targetLookup = useMemo(() => {
+    if (!targetData || !Array.isArray(targetData) || isEmpty(targetData)) return new Map();
+    if (!targetOuterGroupField || !targetInnerGroupField || !targetValueField) return new Map();
+
+    const lookup = new Map();
+    targetData.forEach((targetRow) => {
+      const outerKey = get(targetRow, targetOuterGroupField);
+      const innerKey = get(targetRow, targetInnerGroupField);
+      const targetValue = get(targetRow, targetValueField);
+
+      if (!isNil(outerKey) && !isNil(innerKey) && !isNil(targetValue)) {
+        const key = `${String(outerKey)}__${String(innerKey)}`;
+        const numValue = isNumber(targetValue) ? targetValue : toNumber(targetValue);
+        if (!_isNaN(numValue) && _isFinite(numValue)) {
+          lookup.set(key, numValue);
+        }
+      }
+    });
+
+    return lookup;
+  }, [targetData, targetOuterGroupField, targetInnerGroupField, targetValueField]);
+
+  // Check if target data merging should be active
+  const isTargetDataActive = useMemo(() => {
+    return outerGroupField && innerGroupField && targetData && targetOuterGroupField && targetInnerGroupField && targetValueField && actualValueField && targetLookup.size > 0;
+  }, [outerGroupField, innerGroupField, targetData, targetOuterGroupField, targetInnerGroupField, targetValueField, actualValueField, targetLookup]);
 
   const orderedColumns = useMemo(() => {
     if (isEmpty(columns)) return [];
@@ -1020,7 +1065,12 @@ export default function DataTableComponent({
       });
     }
 
-    // Reorder: outerGroupField first, then rest (innerGroupField is excluded)
+    // When target data is active, exclude actualValueField from regular columns (it will be shown in target columns)
+    if (isTargetDataActive) {
+      filteredColumns = filteredColumns.filter(col => col !== actualValueField);
+    }
+
+    // Reorder: outerGroupField first, then target columns (if active), then rest (innerGroupField is excluded)
     if (outerGroupField) {
       const otherColumns = filteredColumns.filter(
         col => col !== outerGroupField
@@ -1029,11 +1079,17 @@ export default function DataTableComponent({
       if (outerGroupField && includes(filteredColumns, outerGroupField)) {
         ordered.push(outerGroupField);
       }
+
+      // Add target data columns first among numeric columns if active
+      if (isTargetDataActive) {
+        ordered.push(TARGET_PERCENTAGE_COL, TARGET_TARGET_COL, TARGET_ACTUAL_COL);
+      }
+
       return [...ordered, ...otherColumns];
     }
 
     return filteredColumns;
-  }, [columns, visibleColumns, outerGroupField, innerGroupField, columnTypes]);
+  }, [columns, visibleColumns, outerGroupField, innerGroupField, columnTypes, isTargetDataActive, actualValueField]);
 
   const frozenCols = useMemo(
     () => isEmpty(orderedColumns) ? [] : [head(orderedColumns)],
@@ -1046,8 +1102,13 @@ export default function DataTableComponent({
   );
 
   const formatHeaderName = useCallback((key) => {
+    if (key === TARGET_PERCENTAGE_COL) return 'Percentage';
+    if (key === TARGET_TARGET_COL) return 'Target';
+    if (key === TARGET_ACTUAL_COL) {
+      return actualValueField ? startCase(actualValueField.split('__').join(' ').split('_').join(' ')) : 'Actual';
+    }
     return startCase(key.split('__').join(' ').split('_').join(' '));
-  }, []);
+  }, [actualValueField, TARGET_PERCENTAGE_COL, TARGET_TARGET_COL, TARGET_ACTUAL_COL]);
 
   // Compute available columns for visibility selector based on mode
   const availableColumnsForVisibility = useMemo(() => {
@@ -1158,11 +1219,21 @@ export default function DataTableComponent({
         }
       });
 
+      // Initialize filters for target columns if active
+      if (isTargetDataActive) {
+        const targetColumns = [TARGET_PERCENTAGE_COL, TARGET_TARGET_COL, TARGET_ACTUAL_COL];
+        targetColumns.forEach((col) => {
+          if (!newFilters[col]) {
+            newFilters[col] = { value: null, matchMode: 'contains' }; // Numeric filter uses 'contains' matchMode
+          }
+        });
+      }
+
       setFilters(newFilters);
     } else if (!enableFilter) {
       setFilters({});
     }
-  }, [columns, enableFilter, columnTypes, multiselectColumns, textFilterColumns]);
+  }, [columns, enableFilter, columnTypes, multiselectColumns, textFilterColumns, isTargetDataActive]);
 
   const calculateColumnWidths = useMemo(() => {
     const widths = {};
@@ -1219,13 +1290,70 @@ export default function DataTableComponent({
     return widths;
   }, [safeData, columns, enableSort, formatHeaderName, formatCellValue, columnTypes]);
 
+  // Helper function to get computed value for target columns
+  const getTargetColumnValue = useCallback((rowData, col) => {
+    if (col === TARGET_PERCENTAGE_COL || col === TARGET_TARGET_COL || col === TARGET_ACTUAL_COL) {
+      // Get actual value from rowData
+      const actualValue = get(rowData, actualValueField);
+      const actualNum = isNumber(actualValue) ? actualValue : (isNil(actualValue) ? null : toNumber(actualValue));
+
+      // Get target value from lookup
+      const outerKey = get(rowData, outerGroupField);
+      const innerKey = get(rowData, innerGroupField);
+      let targetValue = null;
+      if (!isNil(outerKey) && !isNil(innerKey)) {
+        const lookupKey = `${String(outerKey)}__${String(innerKey)}`;
+        targetValue = targetLookup.get(lookupKey);
+      }
+
+      // Calculate percentage
+      let percentage = null;
+      if (!isNil(targetValue) && !isNil(actualNum) && !_isNaN(targetValue) && !_isNaN(actualNum) && _isFinite(targetValue) && _isFinite(actualNum) && targetValue !== 0) {
+        percentage = (actualNum / targetValue) * 100;
+      }
+
+      if (col === TARGET_PERCENTAGE_COL) {
+        return percentage;
+      } else if (col === TARGET_TARGET_COL) {
+        return targetValue;
+      } else if (col === TARGET_ACTUAL_COL) {
+        return actualNum;
+      }
+    }
+    return null;
+  }, [targetLookup, outerGroupField, innerGroupField, actualValueField]);
+
+  // Custom sort function for target columns
+  const getTargetColumnSortFunction = useCallback((col) => {
+    return (rowData1, rowData2) => {
+      const val1 = getTargetColumnValue(rowData1, col);
+      const val2 = getTargetColumnValue(rowData2, col);
+      
+      // Handle null/undefined values
+      if (isNil(val1) && isNil(val2)) return 0;
+      if (isNil(val1)) return 1; // null values go to end
+      if (isNil(val2)) return -1;
+      
+      // Compare numeric values
+      const num1 = isNumber(val1) ? val1 : toNumber(val1);
+      const num2 = isNumber(val2) ? val2 : toNumber(val2);
+      
+      if (_isNaN(num1) && _isNaN(num2)) return 0;
+      if (_isNaN(num1)) return 1;
+      if (_isNaN(num2)) return -1;
+      
+      return num1 - num2;
+    };
+  }, [getTargetColumnValue]);
+
   const filteredData = useMemo(() => {
     if (isEmpty(safeData)) return [];
 
     return filter(safeData, (row) => {
       if (!row || typeof row !== 'object') return false;
 
-      return every(columns, (col) => {
+      // Check regular columns
+      const regularColumnsPass = every(columns, (col) => {
         const filterObj = get(filters, col);
         if (!filterObj || isNil(filterObj.value) || filterObj.value === '') return true;
 
@@ -1271,8 +1399,31 @@ export default function DataTableComponent({
         const strFilter = toLower(String(filterValue));
         return includes(strCell, strFilter);
       });
+
+      if (!regularColumnsPass) return false;
+
+      // Check target columns if active
+      if (isTargetDataActive) {
+        const targetColumns = [TARGET_PERCENTAGE_COL, TARGET_TARGET_COL, TARGET_ACTUAL_COL];
+        return every(targetColumns, (col) => {
+          const filterObj = get(filters, col);
+          if (!filterObj || isNil(filterObj.value) || filterObj.value === '') return true;
+
+          // Handle empty arrays for multiselect
+          if (isArray(filterObj.value) && isEmpty(filterObj.value)) return true;
+
+          const cellValue = getTargetColumnValue(row, col);
+          const filterValue = filterObj.value;
+
+          // Use numeric filter for target columns
+          const parsedFilter = parseNumericFilter(filterValue);
+          return applyNumericFilter(cellValue, parsedFilter);
+        });
+      }
+
+      return true;
     });
-  }, [safeData, filters, columns, columnTypes, multiselectColumns]);
+  }, [safeData, filters, columns, columnTypes, multiselectColumns, isTargetDataActive, getTargetColumnValue]);
 
   // Group filtered data by outerGroupField if set
   const groupedData = useMemo(() => {
@@ -1369,11 +1520,19 @@ export default function DataTableComponent({
       return dataForSorting;
     }
 
-    const fields = multiSortMeta.map(s => s.field);
+    // Map sort fields to either field names or custom sort functions for target columns
+    const fields = multiSortMeta.map(s => {
+      const field = s.field;
+      // If it's a target column, use a custom sort function
+      if (field === TARGET_PERCENTAGE_COL || field === TARGET_TARGET_COL || field === TARGET_ACTUAL_COL) {
+        return (rowData) => getTargetColumnValue(rowData, field);
+      }
+      return field;
+    });
     const orders = multiSortMeta.map(s => s.order === 1 ? 'asc' : 'desc');
 
     return orderBy(dataForSorting, fields, orders);
-  }, [dataForSorting, multiSortMeta]);
+  }, [dataForSorting, multiSortMeta, getTargetColumnValue]);
 
 
   const calculateSums = useMemo(() => {
@@ -1408,6 +1567,15 @@ export default function DataTableComponent({
 
   const footerTemplate = (column, isFirstColumn = false) => {
     if (!enableSummation) return null;
+
+    // Target columns don't show summation
+    if (column === TARGET_PERCENTAGE_COL || column === TARGET_TARGET_COL || column === TARGET_ACTUAL_COL) {
+      return isFirstColumn ? (
+        <div className="text-left">
+          <strong>Total</strong>
+        </div>
+      ) : null;
+    }
 
     const colType = get(columnTypes, column);
 
@@ -1517,9 +1685,18 @@ export default function DataTableComponent({
         clearedFilters[col] = { value: null, matchMode: 'contains' };
       }
     });
+
+    // Also clear target columns if active
+    if (isTargetDataActive) {
+      const targetColumns = [TARGET_PERCENTAGE_COL, TARGET_TARGET_COL, TARGET_ACTUAL_COL];
+      targetColumns.forEach((col) => {
+        clearedFilters[col] = { value: null, matchMode: 'contains' };
+      });
+    }
+
     setFilters(clearedFilters);
     setFirst(0);
-  }, [columns, columnTypes, multiselectColumns]);
+  }, [columns, columnTypes, multiselectColumns, isTargetDataActive]);
 
   // Format filter value for display in chip
   const formatFilterValue = useCallback((col, filterValue, colType) => {
@@ -1586,8 +1763,33 @@ export default function DataTableComponent({
         }
       }
     });
+
+    // Also check target columns if active
+    if (isTargetDataActive) {
+      const targetColumns = [TARGET_PERCENTAGE_COL, TARGET_TARGET_COL, TARGET_ACTUAL_COL];
+      targetColumns.forEach((col) => {
+        const filterObj = get(filters, col);
+        if (filterObj && !isNil(filterObj.value) && filterObj.value !== '') {
+          // Handle empty arrays for multiselect
+          if (isArray(filterObj.value) && isEmpty(filterObj.value)) {
+            return;
+          }
+          // Target columns are numeric, so format as string
+          const formattedValue = formatFilterValue(col, filterObj.value, { isNumeric: true });
+          if (formattedValue !== null) {
+            active.push({
+              column: col,
+              value: filterObj.value,
+              formattedValue,
+              colType: { isNumeric: true }
+            });
+          }
+        }
+      });
+    }
+
     return active;
-  }, [filters, columns, enableFilter, columnTypes, formatFilterValue, multiselectColumns]);
+  }, [filters, columns, enableFilter, columnTypes, formatFilterValue, multiselectColumns, isTargetDataActive]);
 
   const textFilterElement = useCallback((col) => (options) => {
     const filterState = get(filters, col);
@@ -1659,6 +1861,11 @@ export default function DataTableComponent({
   }, [filters, updateFilter, optionColumnValues, formatHeaderName]);
 
   const getFilterElement = useCallback((col) => {
+    // Target columns always use numeric filter
+    if (col === TARGET_PERCENTAGE_COL || col === TARGET_TARGET_COL || col === TARGET_ACTUAL_COL) {
+      return numericFilterElement(col);
+    }
+
     const colType = get(columnTypes, col);
     const isMultiselectColumn = includes(multiselectColumns, col);
 
@@ -1679,10 +1886,108 @@ export default function DataTableComponent({
   }, [columnTypes, multiselectColumns, booleanFilterElement, dateFilterElement, numericFilterElement, textFilterElement, multiselectFilterElement]);
 
   const getBodyTemplate = useCallback((col) => {
+    // Handle target data columns
+    if (col === TARGET_PERCENTAGE_COL || col === TARGET_TARGET_COL || col === TARGET_ACTUAL_COL) {
+      return (rowData) => {
+        // Get actual value from rowData
+        const actualValue = get(rowData, actualValueField);
+        const actualNum = isNumber(actualValue) ? actualValue : (isNil(actualValue) ? null : toNumber(actualValue));
+
+        // Get target value from lookup
+        const outerKey = get(rowData, outerGroupField);
+        const innerKey = get(rowData, innerGroupField);
+        let targetValue = null;
+        if (!isNil(outerKey) && !isNil(innerKey)) {
+          const lookupKey = `${String(outerKey)}__${String(innerKey)}`;
+          targetValue = targetLookup.get(lookupKey);
+        }
+
+        // Calculate percentage
+        let percentage = null;
+        if (!isNil(targetValue) && !isNil(actualNum) && !_isNaN(targetValue) && !_isNaN(actualNum) && _isFinite(targetValue) && _isFinite(actualNum) && targetValue !== 0) {
+          percentage = (actualNum / targetValue) * 100;
+        }
+
+        const formatNum = (num) => {
+          if (isNil(num) || _isNaN(num) || !_isFinite(num)) return '-';
+          return num % 1 === 0
+            ? num.toLocaleString('en-US')
+            : num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        };
+
+        const formatPercentage = (pct) => {
+          if (isNil(pct) || _isNaN(pct) || !_isFinite(pct)) return '-';
+          return `${pct.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+        };
+
+        if (col === TARGET_PERCENTAGE_COL) {
+          return (
+            <div className="text-xs sm:text-sm text-right">
+              <div className="font-semibold text-blue-700">{formatPercentage(percentage)}</div>
+            </div>
+          );
+        } else if (col === TARGET_TARGET_COL) {
+          return (
+            <div className="text-xs sm:text-sm text-right">
+              <div>{formatNum(targetValue)}</div>
+            </div>
+          );
+        } else if (col === TARGET_ACTUAL_COL) {
+          return (
+            <div className="text-xs sm:text-sm text-right">
+              <div>{formatNum(actualNum)}</div>
+            </div>
+          );
+        }
+        return null;
+      };
+    }
+
     const colType = get(columnTypes, col);
     const isBooleanCol = get(colType, 'isBoolean', false);
     const isDateCol = get(colType, 'isDate', false);
     const isNumericCol = get(colType, 'isNumeric', false);
+    const isOuterGroupCol = col === outerGroupField;
+    const isInnerGroupCol = col === innerGroupField;
+
+    // Handle clickable group columns
+    if (isOuterGroupCol && onOuterGroupClick) {
+      return (rowData) => {
+        const value = get(rowData, col);
+        const cellValue = formatCellValue(value, colType);
+        return (
+          <div
+            className={`text-xs sm:text-sm truncate cursor-pointer hover:bg-blue-50 px-1 py-0.5 rounded transition-colors ${isNumericCol ? 'text-right' : 'text-left'}`}
+            title={cellValue}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOuterGroupClick(rowData, col, value);
+            }}
+          >
+            {cellValue}
+          </div>
+        );
+      };
+    }
+
+    if (isInnerGroupCol && onInnerGroupClick) {
+      return (rowData) => {
+        const value = get(rowData, col);
+        const cellValue = formatCellValue(value, colType);
+        return (
+          <div
+            className={`text-xs sm:text-sm truncate cursor-pointer hover:bg-green-50 px-1 py-0.5 rounded transition-colors ${isNumericCol ? 'text-right' : 'text-left'}`}
+            title={cellValue}
+            onClick={(e) => {
+              e.stopPropagation();
+              onInnerGroupClick(rowData, col, value);
+            }}
+          >
+            {cellValue}
+          </div>
+        );
+      };
+    }
 
     if (isBooleanCol) {
       return (rowData) => booleanBodyTemplate(rowData, col);
@@ -1698,7 +2003,107 @@ export default function DataTableComponent({
         {formatCellValue(get(rowData, col), colType)}
       </div>
     );
-  }, [columnTypes, booleanBodyTemplate, dateBodyTemplate, formatCellValue]);
+  }, [columnTypes, outerGroupField, innerGroupField, onOuterGroupClick, onInnerGroupClick, booleanBodyTemplate, dateBodyTemplate, formatCellValue, isTargetDataActive, targetLookup, actualValueField, TARGET_PERCENTAGE_COL, TARGET_TARGET_COL, TARGET_ACTUAL_COL]);
+
+  // Cell editor functions
+  const getCellEditor = useCallback((col) => {
+    if (!enableCellEdit) return undefined;
+
+    // Disable editing entirely if Outer Group or Inner Group is present
+    if (outerGroupField || innerGroupField) {
+      return undefined;
+    }
+
+    const colType = get(columnTypes, col);
+    const isBooleanCol = get(colType, 'isBoolean', false);
+    const isDateCol = get(colType, 'isDate', false);
+    const isNumericCol = get(colType, 'isNumeric', false);
+
+    // Don't allow editing of group fields, boolean, or date columns
+    if (col === outerGroupField || col === innerGroupField || isBooleanCol || isDateCol) {
+      return undefined;
+    }
+
+    // Check if column is in nonEditableColumns
+    if (includes(nonEditableColumns, col)) {
+      return undefined;
+    }
+
+    // Return editor function that also checks isCellEditable if provided
+    return (options) => {
+      const { rowData } = options;
+
+      // Check if row is a group row
+      if (rowData && rowData.__isGroupRow__) {
+        return null;
+      }
+
+      // Check isCellEditable function if provided
+      if (isCellEditable && typeof isCellEditable === 'function') {
+        if (!isCellEditable(rowData, col)) {
+          return null;
+        }
+      }
+
+      if (isNumericCol) {
+        return (
+          <InputNumber
+            value={options.value}
+            onValueChange={(e) => options.editorCallback(e.value)}
+            onKeyDown={(e) => e.stopPropagation()}
+            style={{ width: '100%' }}
+          />
+        );
+      }
+
+      return (
+        <InputText
+          type="text"
+          value={options.value || ''}
+          onChange={(e) => options.editorCallback(e.target.value)}
+          onKeyDown={(e) => e.stopPropagation()}
+          style={{ width: '100%' }}
+        />
+      );
+    };
+  }, [enableCellEdit, columnTypes, outerGroupField, innerGroupField, nonEditableColumns, isCellEditable]);
+
+  // Handle cell edit complete
+  const handleCellEditComplete = useCallback((e) => {
+    const { rowData, newValue, field, originalEvent: event } = e;
+    const oldValue = get(rowData, field);
+
+    // Store old value before update
+    const colType = get(columnTypes, field);
+    const isNumericCol = get(colType, 'isNumeric', false);
+
+    // Validate and update
+    if (isNumericCol) {
+      const numValue = isNumber(newValue) ? newValue : toNumber(newValue);
+      if (!_isNaN(numValue) && _isFinite(numValue)) {
+        rowData[field] = numValue;
+      } else {
+        event.preventDefault();
+        return;
+      }
+    } else {
+      if (newValue !== null && newValue !== undefined && String(newValue).trim().length > 0) {
+        rowData[field] = newValue;
+      } else {
+        event.preventDefault();
+        return;
+      }
+    }
+
+    // Call the callback with old and new values
+    if (onCellEditComplete) {
+      onCellEditComplete({
+        ...e,
+        oldValue,
+        rowData: { ...rowData }
+      });
+    }
+  }, [columnTypes, onCellEditComplete, toNumber]);
 
   // Check if a row can be expanded
   const allowExpansion = useCallback((rowData) => {
@@ -1772,10 +2177,16 @@ export default function DataTableComponent({
   };
 
   // Reusable Table Controls Component
-  const TableControls = ({ showFullscreenButton = true, controlsRowClassName = "" }) => (
+  const TableControls = ({
+    showFullscreenButton = true,
+    controlsRowClassName = "",
+    onClose,
+    onMaximizeToggle,
+    isMaximized: maximized = false
+  }) => (
     <div className={`mb-4 flex items-center justify-between gap-4 flex-wrap ${controlsRowClassName}`}>
       {/* Left side: Visibility Control and Lock button */}
-      <div className="flex-shrink-0 flex items-center gap-2">
+      <div className="shrink-0 flex items-center gap-2">
         {onVisibleColumnsChange && !isEmpty(availableColumnsForVisibility) && (
           <IconOnlyMultiselectFilter
             value={visibleColumns}
@@ -1793,8 +2204,8 @@ export default function DataTableComponent({
         <button
           onClick={() => setFreezeFirstColumn(!freezeFirstColumn)}
           className={`p-2 rounded-lg transition-colors flex items-center justify-center ${freezeFirstColumn
-              ? 'bg-blue-600 text-white hover:bg-blue-700'
-              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            ? 'bg-blue-600 text-white hover:bg-blue-700'
+            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
             }`}
           title={freezeFirstColumn ? 'Unlock first column' : 'Lock first column'}
         >
@@ -1802,8 +2213,16 @@ export default function DataTableComponent({
         </button>
       </div>
 
-      {/* Right side: Fullscreen and Export buttons */}
-      <div className="flex-shrink-0 flex items-center gap-2">
+      {/* Right side: Fullscreen, Maximize/Minimize, Close, and Export buttons */}
+      <div className="shrink-0 flex items-center gap-2">
+        <button
+          onClick={exportToXLSX}
+          disabled={isEmpty(sortedData)}
+          className="p-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+          title="Export to Excel"
+        >
+          <i className="pi pi-file-excel"></i>
+        </button>
         {showFullscreenButton && (
           <button
             onClick={() => setIsFullscreen(true)}
@@ -1813,14 +2232,24 @@ export default function DataTableComponent({
             <i className="pi pi-window-maximize"></i>
           </button>
         )}
-        <button
-          onClick={exportToXLSX}
-          disabled={isEmpty(sortedData)}
-          className="p-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
-          title="Export to Excel"
-        >
-          <i className="pi pi-file-excel"></i>
-        </button>
+        {onMaximizeToggle && (
+          <button
+            onClick={onMaximizeToggle}
+            className="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center justify-center"
+            title={maximized ? 'Minimize' : 'Maximize'}
+          >
+            <i className={`pi ${maximized ? 'pi-window-minimize' : 'pi-window-maximize'}`}></i>
+          </button>
+        )}
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="p-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center"
+            title="Close"
+          >
+            <i className="pi pi-times"></i>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1828,7 +2257,7 @@ export default function DataTableComponent({
   // Reusable Filter Chips Component
   const FilterChips = ({ className = "" }) => {
     if (!enableFilter || isEmpty(activeFilters)) return null;
-    
+
     return (
       <div className={`mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg ${className}`}>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1888,6 +2317,7 @@ export default function DataTableComponent({
         onRowToggle={(e) => setExpandedRows(e.data)}
         rowExpansionTemplate={outerGroupField ? rowExpansionTemplate : undefined}
         dataKey={outerGroupField ? "__groupKey__" : undefined}
+        editMode={enableCellEdit ? "cell" : undefined}
       >
         {outerGroupField && (
           <Column
@@ -1896,8 +2326,9 @@ export default function DataTableComponent({
           />
         )}
         {frozenCols.map((col, index) => {
+          const isTargetCol = col === TARGET_PERCENTAGE_COL || col === TARGET_TARGET_COL || col === TARGET_ACTUAL_COL;
           const colType = get(columnTypes, col);
-          const isNumericCol = get(colType, 'isNumeric', false);
+          const isNumericCol = isTargetCol || get(colType, 'isNumeric', false);
           const isFirstColumn = index === 0;
           return (
             <Column
@@ -1905,11 +2336,12 @@ export default function DataTableComponent({
               field={col}
               header={formatHeaderName(col)}
               sortable={enableSort}
+              sortFunction={isTargetCol ? getTargetColumnSortFunction(col) : undefined}
               frozen={freezeFirstColumn}
               style={{
-                minWidth: `${get(calculateColumnWidths, col, 120)}px`,
-                width: `${get(calculateColumnWidths, col, 120)}px`,
-                maxWidth: `${get(calculateColumnWidths, col, 200)}px`
+                minWidth: isTargetCol ? '130px' : `${get(calculateColumnWidths, col, 120)}px`,
+                width: isTargetCol ? '130px' : `${get(calculateColumnWidths, col, 120)}px`,
+                maxWidth: isTargetCol ? '150px' : `${get(calculateColumnWidths, col, 200)}px`
               }}
               filter={enableFilter}
               filterElement={enableFilter ? getFilterElement(col) : undefined}
@@ -1917,24 +2349,28 @@ export default function DataTableComponent({
               showClearButton={false}
               footer={footerTemplate(col, isFirstColumn)}
               body={getBodyTemplate(col)}
-              align={isNumericCol ? 'right' : 'left'}
+              editor={getCellEditor(col)}
+              onCellEditComplete={enableCellEdit && getCellEditor(col) ? handleCellEditComplete : undefined}
+              align="right"
             />
           );
         })}
 
         {regularCols.map((col) => {
+          const isTargetCol = col === TARGET_PERCENTAGE_COL || col === TARGET_TARGET_COL || col === TARGET_ACTUAL_COL;
           const colType = get(columnTypes, col);
-          const isNumericCol = get(colType, 'isNumeric', false);
+          const isNumericCol = isTargetCol || get(colType, 'isNumeric', false);
           return (
             <Column
               key={col}
               field={col}
               header={formatHeaderName(col)}
               sortable={enableSort}
+              sortFunction={isTargetCol ? getTargetColumnSortFunction(col) : undefined}
               style={{
-                minWidth: `${get(calculateColumnWidths, col, 120)}px`,
-                width: `${get(calculateColumnWidths, col, 120)}px`,
-                maxWidth: `${get(calculateColumnWidths, col, 400)}px`
+                minWidth: isTargetCol ? '130px' : `${get(calculateColumnWidths, col, 120)}px`,
+                width: isTargetCol ? '130px' : `${get(calculateColumnWidths, col, 120)}px`,
+                maxWidth: isTargetCol ? '150px' : `${get(calculateColumnWidths, col, 400)}px`
               }}
               filter={enableFilter}
               filterElement={enableFilter ? getFilterElement(col) : undefined}
@@ -1942,7 +2378,9 @@ export default function DataTableComponent({
               showClearButton={false}
               footer={footerTemplate(col)}
               body={getBodyTemplate(col)}
-              align={isNumericCol ? 'right' : 'left'}
+              editor={getCellEditor(col)}
+              onCellEditComplete={enableCellEdit && getCellEditor(col) ? handleCellEditComplete : undefined}
+              align="right"
             />
           );
         })}
@@ -1967,7 +2405,7 @@ export default function DataTableComponent({
   // Reusable Feature Status Indicators Component
   const FeatureStatusIndicators = ({ className = "" }) => {
     if (enableSort && enableFilter && enableSummation) return null;
-    
+
     return (
       <div className={`mb-3 flex flex-wrap gap-2 text-xs ${className}`}>
         {!enableSort && (
@@ -2047,23 +2485,46 @@ export default function DataTableComponent({
 
       {/* Fullscreen Dialog */}
       <Dialog
+        ref={dialogRef}
         visible={isFullscreen}
+        showHeader={false}
         maximizable
+        maximized={isMaximized}
         modal
         style={{ width: '70vw', height: '90vh' }}
-        contentStyle={{ padding: '1.5rem', overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%', maxHeight: '100%' }}
-        onHide={() => setIsFullscreen(false)}
+        contentStyle={{ padding: '1rem', paddingBottom: '0', overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%', maxHeight: '100%' }}
+        onHide={(e) => {
+          if (!isFullscreen) return;
+          setIsFullscreen(false);
+          setIsMaximized(false);
+        }}
+        onMaximize={(e) => {
+          // onMaximize callback receives { originalEvent, maximized }
+          setIsMaximized(e.maximized);
+        }}
       >
         <div className="w-full h-full flex flex-col" style={{ height: '100%', maxHeight: '100%', minHeight: 0, overflow: 'hidden' }}>
-          <FeatureStatusIndicators className="flex-shrink-0" />
-          <TableControls showFullscreenButton={false} controlsRowClassName="flex-shrink-0" />
-          <FilterChips className="flex-shrink-0" />
-          <TableView 
-            scrollHeight="flex" 
-            containerClassName="flex-1" 
+          <FeatureStatusIndicators className="shrink-0" />
+          <TableControls
+            showFullscreenButton={false}
+            controlsRowClassName="shrink-0"
+            onClose={() => {
+              setIsFullscreen(false);
+              setIsMaximized(false);
+            }}
+            onMaximizeToggle={() => {
+              // Toggle maximize state directly
+              setIsMaximized(!isMaximized);
+            }}
+            isMaximized={isMaximized}
+          />
+          <FilterChips className="shrink-0" />
+          <TableView
+            scrollHeight="flex"
+            containerClassName="flex-1"
             containerStyle={{ minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
           />
-          <PaginatorWrapper className="flex-shrink-0" />
+          <PaginatorWrapper className="shrink-0" />
         </div>
       </Dialog>
     </div>

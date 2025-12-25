@@ -1,11 +1,13 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { useLocalStorage } from 'primereact/hooks';
+import { Toast } from 'primereact/toast';
 import DataTableComponent from '@/components/DataTable';
 import DataTableControls from '@/components/DataTableControls';
 import data from '@/resource/data';
-import { uniq, flatMap, keys, isEmpty } from 'lodash';
+import Target from '@/resource/target';
+import { uniq, flatMap, keys, isEmpty, startCase } from 'lodash';
 
 // Custom hook for localStorage with proper JSON serialization for booleans
 function useLocalStorageBoolean(key, defaultValue) {
@@ -223,10 +225,12 @@ function useLocalStorageNumber(key, defaultValue) {
 }
 
 export default function Home() {
+  const toast = useRef(null);
   const [isLoading, setIsLoading] = useState(true);
   const [enableSort, setEnableSort] = useLocalStorageBoolean('datatable-enableSort', true);
   const [enableFilter, setEnableFilter] = useLocalStorageBoolean('datatable-enableFilter', true);
   const [enableSummation, setEnableSummation] = useLocalStorageBoolean('datatable-enableSummation', true);
+  const [enableCellEdit, setEnableCellEdit] = useLocalStorageBoolean('datatable-enableCellEdit', false);
   const [rowsPerPageOptionsRaw, setRowsPerPageOptionsRaw] = useLocalStorageArray('datatable-rowsPerPageOptions', [5, 10, 25, 50, 100, 200]);
   const [defaultRowsRaw, setDefaultRowsRaw] = useLocalStorageNumber('datatable-defaultRows', 10);
   const [textFilterColumnsRaw, setTextFilterColumnsRaw] = useLocalStorageArray('datatable-textFilterColumns', []);
@@ -235,6 +239,12 @@ export default function Home() {
   const [greenFieldsRaw, setGreenFieldsRaw] = useLocalStorageArray('datatable-greenFields', []);
   const [outerGroupFieldRaw, setOuterGroupFieldRaw] = useLocalStorageString('datatable-outerGroupField', null);
   const [innerGroupFieldRaw, setInnerGroupFieldRaw] = useLocalStorageString('datatable-innerGroupField', null);
+  const [nonEditableColumnsRaw, setNonEditableColumnsRaw] = useLocalStorageArray('datatable-nonEditableColumns', []);
+  const [enableTargetDataRaw, setEnableTargetDataRaw] = useLocalStorageBoolean('datatable-enableTargetData', false);
+  const [targetOuterGroupFieldRaw, setTargetOuterGroupFieldRaw] = useLocalStorageString('datatable-targetOuterGroupField', null);
+  const [targetInnerGroupFieldRaw, setTargetInnerGroupFieldRaw] = useLocalStorageString('datatable-targetInnerGroupField', null);
+  const [targetValueFieldRaw, setTargetValueFieldRaw] = useLocalStorageString('datatable-targetValueField', null);
+  const [actualValueFieldRaw, setActualValueFieldRaw] = useLocalStorageString('datatable-actualValueField', null);
 
   // Mark as loaded after first render to allow localStorage values to initialize
   useEffect(() => {
@@ -243,7 +253,7 @@ export default function Home() {
       // Clean up any corrupted data
       try {
         // Clean up boolean values that might be stored incorrectly
-        const booleanKeys = ['datatable-enableSort', 'datatable-enableFilter', 'datatable-enableSummation'];
+        const booleanKeys = ['datatable-enableSort', 'datatable-enableFilter', 'datatable-enableSummation', 'datatable-enableCellEdit'];
         booleanKeys.forEach(key => {
           try {
             const item = window.localStorage.getItem(key);
@@ -265,7 +275,8 @@ export default function Home() {
           'datatable-textFilterColumns': { defaultValue: [], isColumnList: true },
           'datatable-visibleColumns': { defaultValue: [], isColumnList: true },
           'datatable-redFields': { defaultValue: [], isColumnList: true },
-          'datatable-greenFields': { defaultValue: [], isColumnList: true }
+          'datatable-greenFields': { defaultValue: [], isColumnList: true },
+          'datatable-nonEditableColumns': { defaultValue: [], isColumnList: true }
         };
 
         // Check each key and validate its content
@@ -425,6 +436,14 @@ export default function Home() {
     return greenFieldsRaw;
   }, [greenFieldsRaw]);
 
+  // Ensure nonEditableColumns is always an array
+  const nonEditableColumns = useMemo(() => {
+    if (!Array.isArray(nonEditableColumnsRaw)) {
+      return [];
+    }
+    return nonEditableColumnsRaw;
+  }, [nonEditableColumnsRaw]);
+
   const setRowsPerPageOptions = (value) => {
     if (Array.isArray(value)) {
       setRowsPerPageOptionsRaw(value);
@@ -461,6 +480,12 @@ export default function Home() {
     }
   };
 
+  const setNonEditableColumns = (value) => {
+    if (Array.isArray(value)) {
+      setNonEditableColumnsRaw(value);
+    }
+  };
+
   // Handle outer group field (single value, not array) - already using localStorage hook
   const outerGroupField = outerGroupFieldRaw;
   const setOuterGroupField = setOuterGroupFieldRaw;
@@ -477,8 +502,57 @@ export default function Home() {
     ));
   }, []);
 
+  // Extract column names from target data
+  const targetColumns = useMemo(() => {
+    if (!Array.isArray(Target) || isEmpty(Target)) return [];
+    return uniq(flatMap(Target, (item) =>
+      item && typeof item === 'object' ? keys(item) : []
+    ));
+  }, []);
+
+  // Format field name for display
+  const formatFieldName = (key) => {
+    return startCase(key.split('__').join(' ').split('_').join(' '));
+  };
+
+  // Handle cell edit complete
+  const handleCellEditComplete = (e) => {
+    const { rowData, newValue, field, oldValue } = e;
+    const columnName = formatFieldName(field);
+    
+    toast.current.show({
+      severity: 'success',
+      summary: 'Cell Updated',
+      detail: `Column: ${columnName} | Row: ${JSON.stringify(rowData).substring(0, 50)}... | Previous: ${oldValue} → Current: ${newValue}`,
+      life: 5000
+    });
+  };
+
+  // Handle outer group click
+  const handleOuterGroupClick = (rowData, column, value) => {
+    const columnName = formatFieldName(column);
+    toast.current.show({
+      severity: 'info',
+      summary: 'Outer Group Clicked',
+      detail: `Column: ${columnName} | Value: ${value} | Row: ${JSON.stringify(rowData).substring(0, 50)}...`,
+      life: 5000
+    });
+  };
+
+  // Handle inner group click
+  const handleInnerGroupClick = (rowData, column, value) => {
+    const columnName = formatFieldName(column);
+    toast.current.show({
+      severity: 'info',
+      summary: 'Inner Group Clicked',
+      detail: `Column: ${columnName} | Value: ${value} | Row: ${JSON.stringify(rowData).substring(0, 50)}...`,
+      life: 5000
+    });
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
+      <Toast ref={toast} />
       <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 lg:px-8 py-3 sm:py-4">
           <h1 className="text-xl sm:text-2xl font-semibold text-gray-900">Data Table Component</h1>
@@ -507,6 +581,7 @@ export default function Home() {
               enableSort={enableSort}
               enableFilter={enableFilter}
               enableSummation={enableSummation}
+              enableCellEdit={enableCellEdit}
               rowsPerPageOptions={rowsPerPageOptions}
               defaultRows={defaultRows}
               columns={columns}
@@ -516,9 +591,17 @@ export default function Home() {
               greenFields={greenFields}
               outerGroupField={outerGroupField}
               innerGroupField={innerGroupField}
+              nonEditableColumns={nonEditableColumns}
+              enableTargetData={enableTargetDataRaw}
+              targetColumns={targetColumns}
+              targetOuterGroupField={targetOuterGroupFieldRaw}
+              targetInnerGroupField={targetInnerGroupFieldRaw}
+              targetValueField={targetValueFieldRaw}
+              actualValueField={actualValueFieldRaw}
               onSortChange={setEnableSort}
               onFilterChange={setEnableFilter}
               onSummationChange={setEnableSummation}
+              onCellEditChange={setEnableCellEdit}
               onRowsPerPageOptionsChange={setRowsPerPageOptions}
               onDefaultRowsChange={setDefaultRows}
               onTextFilterColumnsChange={setTextFilterColumns}
@@ -527,6 +610,12 @@ export default function Home() {
               onGreenFieldsChange={setGreenFields}
               onOuterGroupFieldChange={setOuterGroupField}
               onInnerGroupFieldChange={setInnerGroupField}
+              onNonEditableColumnsChange={setNonEditableColumns}
+              onEnableTargetDataChange={setEnableTargetDataRaw}
+              onTargetOuterGroupFieldChange={setTargetOuterGroupFieldRaw}
+              onTargetInnerGroupFieldChange={setTargetInnerGroupFieldRaw}
+              onTargetValueFieldChange={setTargetValueFieldRaw}
+              onActualValueFieldChange={setActualValueFieldRaw}
             />
 
             <DataTableComponent
@@ -544,6 +633,16 @@ export default function Home() {
               greenFields={greenFields}
               outerGroupField={outerGroupField}
               innerGroupField={innerGroupField}
+              enableCellEdit={enableCellEdit}
+              nonEditableColumns={nonEditableColumns}
+              onCellEditComplete={handleCellEditComplete}
+              onOuterGroupClick={handleOuterGroupClick}
+              onInnerGroupClick={handleInnerGroupClick}
+              targetData={enableTargetDataRaw ? Target : null}
+              targetOuterGroupField={enableTargetDataRaw ? targetOuterGroupFieldRaw : null}
+              targetInnerGroupField={enableTargetDataRaw ? targetInnerGroupFieldRaw : null}
+              targetValueField={enableTargetDataRaw ? targetValueFieldRaw : null}
+              actualValueField={enableTargetDataRaw ? actualValueFieldRaw : null}
             />
           </div>
         )}
