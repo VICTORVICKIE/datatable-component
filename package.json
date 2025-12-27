@@ -8,10 +8,15 @@
     "start": "next start"
   },
   "dependencies": {
+    "@graphiql/plugin-explorer": "^5.1.1",
+    "@graphiql/react": "^0.37.3",
     "embla-carousel-autoplay": "^8.6.0",
     "embla-carousel-react": "^8.6.0",
     "embla-carousel-wheel-gestures": "^8.1.0",
+    "firebase": "^12.7.0",
     "framer-motion": "^12.23.26",
+    "graphiql": "^5.2.2",
+    "graphiql-explorer": "^0.9.0",
     "lodash": "^4.17.21",
     "next": "16.0.10",
     "primeicons": "^7.0.0",
