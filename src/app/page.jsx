@@ -7,7 +7,7 @@ export default function Home() {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 lg:px-8 py-3 sm:py-4">
-          <h1 className="text-xl sm:text-2xl font-semibold text-gray-900">Netart</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold text-gray-900">Elbrit</h1>
           <p className="text-xs sm:text-sm text-gray-600 mt-1">Component Dashboard</p>
         </div>
       </header>
