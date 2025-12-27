@@ -6,6 +6,7 @@ import '@graphiql/plugin-explorer/style.css';
 import { ToolbarButton, useGraphiQL } from '@graphiql/react';
 import '@graphiql/react/style.css';
 import { doc, setDoc } from 'firebase/firestore';
+import { parse, print } from 'graphql';
 import 'graphiql/graphiql.css';
 import 'graphiql/setup-workers/webpack';
 import 'graphiql/style.css';
@@ -130,71 +131,134 @@ function GraphiQLWrapper({ children, ...props }) {
 }
 
 
-const getBaseType = (type) => {
-  if (type.ofType) {
-    return getBaseType(type.ofType);
+const parseQueryToTreeNodes = (queryString, parentPath = '') => {
+  if (!queryString || !queryString.trim()) {
+    return [];
   }
-  return type;
-};
-
-
-const hasNestedFields = (type, schema) => {
-  const baseType = getBaseType(type);
-  if (!baseType || !baseType.name) return false;
-
-  const namedType = schema.getType(baseType.name);
-  return namedType &&
-    (namedType.getFields && typeof namedType.getFields === 'function') &&
-    Object.keys(namedType.getFields()).length > 0;
-};
-
-
-const schemaToTreeNodes = (fields, schema, parentPath = '') => {
-  return Object.keys(fields).map((fieldName, index) => {
-    const field = fields[fieldName];
-    const fieldType = field.type;
-    const baseType = getBaseType(fieldType);
-    const key = parentPath ? `${parentPath}.${fieldName}` : fieldName;
-
-
-    const hasChildren = hasNestedFields(fieldType, schema);
-
-    return {
-      key,
-      label: (
-        <div className="flex items-center gap-2">
-          <span className="font-medium">{fieldName}</span>
-          <span className="text-xs text-gray-500">({fieldType.toString()})</span>
-        </div>
-      ),
-      data: {
-        name: fieldName,
-        type: fieldType.toString(),
-        baseTypeName: baseType?.name,
-        description: field.description || '',
-        index,
-        path: key,
-      },
-      leaf: !hasChildren,
-    };
-  });
-};
-
-
-const loadNodeChildren = (node, schema) => {
-  if (!node.data?.baseTypeName || !schema) return [];
 
   try {
-    const namedType = schema.getType(node.data.baseTypeName);
-    if (namedType && namedType.getFields) {
-      const nestedFields = namedType.getFields();
-      return schemaToTreeNodes(nestedFields, schema, node.key);
-    }
-  } catch (error) {
-    console.error('Error loading node children:', error);
-  }
+    const ast = parse(queryString);
+    const treeNodes = [];
 
-  return [];
+
+    const operation = ast.definitions.find(
+      def => def.kind === 'OperationDefinition'
+    );
+
+    if (!operation || !operation.selectionSet) {
+      return [];
+    }
+
+    // Helper to serialize GraphQL values recursively
+    const serializeValue = (value) => {
+      if (value.kind === 'StringValue') return `"${value.value}"`;
+      if (value.kind === 'IntValue') return value.value;
+      if (value.kind === 'BooleanValue') return value.value;
+      if (value.kind === 'FloatValue') return value.value;
+      if (value.kind === 'NullValue') return 'null';
+      if (value.kind === 'EnumValue') return value.value;
+      if (value.kind === 'ListValue') {
+        return `[${value.values.map(v => serializeValue(v)).join(', ')}]`;
+      }
+      if (value.kind === 'ObjectValue') {
+        return `{${value.fields.map(f => `${f.name.value}: ${serializeValue(f.value)}`).join(', ')}}`;
+      }
+      if (value.kind === 'Variable') {
+        return `$${value.name.value}`;
+      }
+      return value.value || '';
+    };
+
+    // Helper to serialize arguments
+    const serializeArguments = (args) => {
+      if (!args || args.length === 0) return '';
+
+      const argStrings = args.map(arg => {
+        const name = arg.name.value;
+        const value = serializeValue(arg.value);
+        return `${name}: ${value}`;
+      });
+
+      return `(${argStrings.join(', ')})`;
+    };
+
+    const processSelections = (selections, currentPath = '', originalPath = '') => {
+      const result = [];
+
+      for (const selection of selections) {
+        if (selection.kind !== 'Field') continue;
+
+        const fieldName = selection.alias?.value || selection.name.value;
+        const originalFieldName = selection.name.value;
+        const hasAlias = !!selection.alias;
+        const hasChildren = selection.selectionSet &&
+          selection.selectionSet.selections &&
+          selection.selectionSet.selections.length > 0;
+
+        // Serialize arguments
+        const argsString = serializeArguments(selection.arguments);
+
+        const actualPath = originalPath ? `${originalPath}.${fieldName}` : fieldName;
+        const displayPath = currentPath ? `${currentPath}.${fieldName}` : fieldName;
+
+        // Process children normally - no flattening of structural wrappers
+        let children = null;
+
+        if (hasChildren) {
+          children = processSelections(
+            selection.selectionSet.selections,
+            displayPath,
+            actualPath
+          );
+        }
+
+        // Create searchable label text for filtering
+        const labelText = hasAlias
+          ? `${fieldName} (alias: ${originalFieldName})${argsString ? ' ' + argsString : ''}`
+          : `${fieldName}${argsString ? ' ' + argsString : ''}`;
+
+        const node = {
+          key: displayPath,
+          label: (
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{fieldName}</span>
+              {hasAlias && (
+                <span className="text-xs text-gray-400">(alias: {originalFieldName})</span>
+              )}
+              {argsString && (
+                <span className="text-xs text-gray-500 font-mono">{argsString}</span>
+              )}
+            </div>
+          ),
+          data: {
+            name: fieldName,
+            originalName: originalFieldName,
+            alias: hasAlias ? originalFieldName : null,
+            arguments: argsString,
+            selection: selection, // Store original selection for query building
+            index: result.length,
+            path: displayPath,
+            actualPath: actualPath,
+            labelText: labelText, // Add searchable text for filtering
+          },
+          leaf: !children || children.length === 0,
+        };
+
+        if (children && children.length > 0) {
+          node.children = children;
+        }
+
+        result.push(node);
+      }
+
+      return result;
+    };
+
+    return processSelections(operation.selectionSet.selections, parentPath);
+  } catch (error) {
+    console.error('Error parsing query:', error);
+    return [];
+  }
 };
 
 
@@ -253,87 +317,26 @@ function SaveModal({ isOpen, onClose }) {
   const [treeNodes, setTreeNodes] = useState([]);
   const [selectedKeys, setSelectedKeys] = useState(null);
   const [expandedKeys, setExpandedKeys] = useState({});
-  const [loadingNodes, setLoadingNodes] = useState(new Set());
   const [saving, setSaving] = useState(false);
-  const schema = useGraphiQL((state) => state.schema);
   const queryEditor = useGraphiQL((state) => state.queryEditor);
 
 
   useEffect(() => {
-    if (isOpen && schema && schema.getQueryType) {
+    if (isOpen && queryEditor) {
       try {
-        const queryType = schema.getQueryType();
-        if (queryType) {
-          const fieldMap = queryType.getFields();
-
-
-          setTreeNodes(prevNodes => {
-            if (prevNodes.length === 0) {
-
-              return schemaToTreeNodes(fieldMap, schema, '');
-            }
-            return prevNodes;
-          });
-        }
+        const queryString = queryEditor.getValue() || '';
+        const nodes = parseQueryToTreeNodes(queryString);
+        setTreeNodes(nodes);
       } catch (error) {
-        console.error('Error extracting schema fields:', error);
+        console.error('Error parsing query to tree:', error);
         setTreeNodes([]);
       }
     }
-  }, [isOpen, schema]);
+  }, [isOpen, queryEditor]);
 
 
   const handleToggle = (event) => {
     setExpandedKeys(event.value);
-  };
-
-
-  const handleNodeExpand = async (event) => {
-
-    if (!event.node.children && !event.node.leaf) {
-      const nodeKey = event.node.key;
-
-
-      setLoadingNodes(prev => new Set(prev).add(nodeKey));
-
-
-      await new Promise(resolve => requestAnimationFrame(resolve));
-
-      try {
-
-        const children = loadNodeChildren(event.node, schema);
-
-
-        const updateNode = (nodes, targetKey) => {
-          return nodes.map((node) => {
-            if (node.key === targetKey) {
-              return {
-                ...node,
-                children: children,
-              };
-            }
-            if (node.children) {
-              return {
-                ...node,
-                children: updateNode(node.children, targetKey),
-              };
-            }
-            return node;
-          });
-        };
-
-        setTreeNodes(prevNodes => updateNode(prevNodes, nodeKey));
-      } catch (error) {
-        console.error('Error loading node children:', error);
-      } finally {
-
-        setLoadingNodes(prev => {
-          const next = new Set(prev);
-          next.delete(nodeKey);
-          return next;
-        });
-      }
-    }
   };
 
 
@@ -343,7 +346,6 @@ function SaveModal({ isOpen, onClose }) {
       setClientSave(false);
       setSelectedKeys(null);
       setExpandedKeys({});
-      setLoadingNodes(new Set());
       setTreeNodes([]);
       setSaving(false);
     }
@@ -402,48 +404,200 @@ function SaveModal({ isOpen, onClose }) {
     const selectedNode = findNodeByKey(treeNodes, selectedKeys);
     if (!selectedNode) return '';
 
+    // Get the top-level field
+    const topLevelKey = selectedKeys.split('.')[0];
+    const topLevelNode = findNodeByKey(treeNodes, topLevelKey);
+    if (!topLevelNode) return '';
 
-    const buildFieldPath = (nodeKey) => {
-      const parts = nodeKey.split('.');
-      let currentNodes = treeNodes;
-      let queryParts = [];
-      let indent = 1;
+    // Build the path from top-level to selected field
+    const parts = selectedKeys.split('.');
+    let currentNodes = treeNodes;
+    const pathNodes = [];
 
-      for (let i = 0; i < parts.length; i++) {
-        const currentKey = parts.slice(0, i + 1).join('.');
-        const node = findNodeByKey(currentNodes, currentKey);
+    // Collect all nodes in the path
+    for (let i = 0; i < parts.length; i++) {
+      const currentKey = parts.slice(0, i + 1).join('.');
+      const node = findNodeByKey(currentNodes, currentKey);
+      if (node) {
+        pathNodes.push(node);
+        if (node.children) {
+          currentNodes = node.children;
+        }
+      }
+    }
 
-        if (node) {
-          const isLast = i === parts.length - 1;
-          const indentStr = '  '.repeat(indent);
+    // Helper to create a field selection AST node
+    const createFieldSelection = (node, childSelections = null) => {
+      const originalSelection = node.data.selection;
 
-          if (isLast) {
+      if (originalSelection) {
+        // Clone the original selection, preserving alias and arguments
+        // Only include selectionSet if we have childSelections to add
+        const field = {
+          kind: 'Field',
+          name: originalSelection.name,
+          ...(originalSelection.alias && { alias: originalSelection.alias }),
+          ...(originalSelection.arguments && originalSelection.arguments.length > 0 && {
+            arguments: originalSelection.arguments
+          }),
+          // Only add selectionSet if we have child selections to include
+          ...(childSelections && childSelections.length > 0 ? {
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: childSelections
+            }
+          } : {})
+        };
+        return field;
+      }
 
-            queryParts.push(`${indentStr}${node.data.name}`);
-          } else {
-
-            queryParts.push(`${indentStr}${node.data.name} {`);
-            indent++;
+      // Fallback: create a basic field selection
+      return {
+        kind: 'Field',
+        name: { kind: 'Name', value: node.data.originalName || node.data.name },
+        ...(node.data.alias && {
+          alias: { kind: 'Name', value: node.data.name }
+        }),
+        ...(childSelections && childSelections.length > 0 ? {
+          selectionSet: {
+            kind: 'SelectionSet',
+            selections: childSelections
           }
+        } : {})
+      };
+    };
 
+    // Build the selection tree from bottom up, properly handling actualPath
+    const buildSelectionTree = (nodes, currentIndex) => {
+      if (currentIndex < 0) return null;
 
-          if (node.children) {
-            currentNodes = node.children;
+      const node = nodes[currentIndex];
+      const isLast = currentIndex === nodes.length - 1;
+      const isFirst = currentIndex === 0;
+
+      // Build child selections first (for nested fields)
+      let childSelections = null;
+      if (!isFirst) {
+        childSelections = buildSelectionTree(nodes, currentIndex - 1);
+      }
+
+      // If this is the last node (the selected field), it's just a simple field
+      if (isLast) {
+        return {
+          kind: 'Field',
+          name: { kind: 'Name', value: node.data.name }
+        };
+      }
+
+      // For nodes with children, we need to check if the child has wrappers
+      // Get the child node (if exists) to check its relative path
+      let currentSelections = childSelections ? [childSelections] : [];
+
+      if (childSelections && currentIndex > 0) {
+        // Get the child node to check its actualPath
+        const childNode = nodes[currentIndex - 1];
+        const childActualPath = childNode.data.actualPath || childNode.data.name;
+        const childActualParts = childActualPath.split('.');
+
+        // Get this node's actual path
+        const nodeActualPath = node.data.actualPath || node.data.name;
+        const nodeActualParts = nodeActualPath.split('.');
+
+        // Find what parts are between this node and the child (the relative path)
+        // This tells us if we need edges/node wrappers
+        const relativeParts = childActualParts.slice(nodeActualParts.length);
+
+        // If there are intermediate wrappers (edges, node), wrap the child selection
+        // relativeParts[0] to relativeParts[length-2] are wrappers
+        // relativeParts[length-1] is the child field name itself
+        if (relativeParts.length > 1) {
+          // Wrap currentSelections with the wrapper fields, going from innermost to outermost
+          for (let i = relativeParts.length - 2; i >= 0; i--) {
+            const wrapperName = relativeParts[i];
+            currentSelections = [{
+              kind: 'Field',
+              name: { kind: 'Name', value: wrapperName },
+              selectionSet: {
+                kind: 'SelectionSet',
+                selections: currentSelections
+              }
+            }];
           }
         }
       }
 
+      // Now create the field selection for this node
+      // This uses the node's display name (which might be an alias) and includes arguments
+      const fieldSelection = createFieldSelection(node, currentSelections.length > 0 ? currentSelections : null);
 
-      for (let i = parts.length - 2; i >= 0; i--) {
-        const indentStr = '  '.repeat(i + 1);
-        queryParts.push(`${indentStr}}`);
-      }
-
-      return queryParts.join('\n');
+      return fieldSelection;
     };
 
-    const queryBody = buildFieldPath(selectedKeys);
-    return queryBody ? `query {\n${queryBody}\n}` : '';
+    // Build the top-level selection
+    let topLevelSelection;
+    if (pathNodes.length === 1) {
+      topLevelSelection = createFieldSelection(topLevelNode, null);
+    } else {
+      let childSelection = buildSelectionTree(pathNodes, pathNodes.length - 1);
+
+      // Check if the child needs wrapping with edges/node structure
+      if (childSelection && pathNodes.length > 1) {
+        const childNode = pathNodes[pathNodes.length - 1];
+        const childActualPath = childNode.data.actualPath || childNode.data.name;
+        const childActualParts = childActualPath.split('.');
+
+        const topLevelActualPath = topLevelNode.data.actualPath || topLevelNode.data.name;
+        const topLevelActualParts = topLevelActualPath.split('.');
+
+        // Find what parts are between top-level and child (the relative path)
+        const relativeParts = childActualParts.slice(topLevelActualParts.length);
+
+        // If there are intermediate wrappers (edges, node), wrap the child selection
+        if (relativeParts.length > 1) {
+          let wrappedSelection = childSelection;
+          // Wrap from innermost to outermost
+          for (let i = relativeParts.length - 2; i >= 0; i--) {
+            const wrapperName = relativeParts[i];
+            wrappedSelection = {
+              kind: 'Field',
+              name: { kind: 'Name', value: wrapperName },
+              selectionSet: {
+                kind: 'SelectionSet',
+                selections: [wrappedSelection]
+              }
+            };
+          }
+          childSelection = wrappedSelection;
+        }
+      }
+
+      topLevelSelection = createFieldSelection(topLevelNode, childSelection ? [childSelection] : null);
+    }
+
+    // Create operation definition
+    const operation = {
+      kind: 'OperationDefinition',
+      operation: 'query',
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [topLevelSelection]
+      }
+    };
+
+    // Create document
+    const document = {
+      kind: 'Document',
+      definitions: [operation]
+    };
+
+    // Use print to convert AST to string
+    try {
+      return print(document);
+    } catch (error) {
+      console.error('Error printing query:', error);
+      // Fallback: return a simple query
+      return `query {\n  ${topLevelNode.data.name}\n}`;
+    }
   };
 
   const selectedQuery = buildSelectedQuery();
@@ -454,7 +608,6 @@ function SaveModal({ isOpen, onClose }) {
 
 
       const currentQuery = queryEditor?.getValue() || '';
-
       try {
         const docRef = doc(db, 'gql', name);
         await setDoc(docRef, {
@@ -543,7 +696,7 @@ function SaveModal({ isOpen, onClose }) {
               </div>
             )}
           </div>
-          {schema && treeNodes.length > 0 ? (
+          {treeNodes.length > 0 ? (
             <div className="border border-gray-300 rounded-lg bg-gray-50 overflow-hidden tree-scrollable-wrapper">
               <Tree
                 value={treeNodes}
@@ -552,14 +705,18 @@ function SaveModal({ isOpen, onClose }) {
                 onSelectionChange={handleNodeSelect}
                 expandedKeys={expandedKeys}
                 onToggle={handleToggle}
-                onExpand={handleNodeExpand}
-                loading={loadingNodes.size > 0}
+                filter
+                filterMode="lenient"
+                filterBy="data.labelText,data.name"
+                filterPlaceholder="Search fields..."
                 className="w-full"
               />
             </div>
           ) : (
             <div className="flex items-center justify-center py-8 text-gray-500 bg-gray-50 border border-gray-300 rounded-lg" style={{ height: '400px' }}>
-              {schema ? 'Loading schema fields...' : 'Loading schema... Please wait while GraphiQL loads the schema.'}
+              {queryEditor?.getValue()?.trim()
+                ? 'No fields found in query. Please write a valid GraphQL query in the editor.'
+                : 'Please write a GraphQL query in the editor to see the field tree.'}
             </div>
           )}
         </div>
