@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "Data Table Component",
-  description: "Primereact Datatable Component Playground",
+  title: "Component Playground",
+  description: "Component Playground",
 };
 
 export default function RootLayout({ children }) {

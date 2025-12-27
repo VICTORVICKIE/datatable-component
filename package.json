@@ -8,12 +8,17 @@
     "start": "next start"
   },
   "dependencies": {
+    "embla-carousel-autoplay": "^8.6.0",
+    "embla-carousel-react": "^8.6.0",
+    "embla-carousel-wheel-gestures": "^8.1.0",
+    "framer-motion": "^12.23.26",
     "lodash": "^4.17.21",
     "next": "16.0.10",
     "primeicons": "^7.0.0",
     "primereact": "^10.9.7",
     "react": "19.2.1",
     "react-dom": "19.2.1",
+    "swiper": "^12.0.3",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

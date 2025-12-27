@@ -809,3 +809,27 @@ body {
 .multiselect-filter-container input[type="checkbox"] {
     cursor: pointer;
 }
+
+/* Swiper Carousel Styles - Optimized for easier swiping */
+.swiper {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+}
+
+.swiper-wrapper {
+    height: 100%;
+}
+
+.swiper-slide {
+    height: 100%;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    /* Improve rendering performance */
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    will-change: transform;
+}
